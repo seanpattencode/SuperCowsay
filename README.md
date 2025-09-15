@@ -7,10 +7,11 @@
 This project demonstrates extreme performance optimization techniques by taking the simple `cowsay` program and pushing it to its absolute performance limits. The goal is **maximum performance above all else** - every optimization technique from high-level algorithmic improvements down to hand-crafted assembly has been explored.
 
 **Key Achievements:**
-- **2928ms execution time** (down from 6066ms baseline)
-- **3,415 operations per second** (up from 1,648 ops/sec)
-- **Single syscall execution** (down from 35+ syscalls)
-- **~100 CPU instructions** (down from ~5,000 instructions)
+- **1.119ms single-call time** (down from 1.461ms baseline = 23.4% faster)
+- **3,745 operations per second** (up from 1,715 ops/sec = 118% improvement)
+- **267ms per 1,000 calls** (down from 583ms = 2.18x faster at scale)
+- **Single syscall execution** (down from 35+ syscalls = 94% reduction)
+- **~100 CPU instructions** (down from ~5,000 instructions = 98% reduction)
 - **Full arbitrary input support maintained**
 
 ```
@@ -26,23 +27,39 @@ This project demonstrates extreme performance optimization techniques by taking 
 
 ## Performance Results
 
-### Absolute Performance Numbers (10,000 iterations)
+### Absolute Performance Numbers
 
+#### Single-Call Performance (50 iterations, real-world usage)
 ```
-Version                    Time     Ops/sec   Instructions  Syscalls  Binary
-────────────────────────────────────────────────────────────────────────────
-Original (baseline)        6066ms   1,648     ~5,000       35+       17KB
-Minimal C                  6165ms   1,622     ~4,500       3         16KB
-Buffer Optimized           6270ms   1,595     ~4,200       3         16KB
-Zero-copy I/O              6100ms   1,639     ~3,800       2         16KB
-────────────────────────────────────────────────────────────────────────────
-🏆 WINNER: Dynamic Assembly 2928ms   3,415     ~100         2         9KB
-Static Assembly (no input) 2916ms   3,429     8            2         9KB
-────────────────────────────────────────────────────────────────────────────
-IMPROVEMENT:               -52%     +107%     -98%         -94%      -47%
+Version                    Avg Time   Min Time   Max Time   Instructions  Syscalls  Binary
+──────────────────────────────────────────────────────────────────────────────────────────
+Original (baseline)        1.461ms    1.219ms    1.783ms    ~5,000       35+       17KB
+Minimal C                  1.429ms    1.224ms    1.767ms    ~4,500       3         16KB
+Zero-copy I/O              1.420ms    1.169ms    1.799ms    ~3,800       2         16KB
+──────────────────────────────────────────────────────────────────────────────────────────
+WINNER: Dynamic Assembly    1.119ms    0.903ms    1.441ms    ~100         2         9KB
+──────────────────────────────────────────────────────────────────────────────────────────
+IMPROVEMENT vs Original:   -23.4%     -25.9%     -19.2%     -98%         -94%      -47%
 ```
 
-### How the 2.07x Speedup Was Achieved
+#### High-Volume Performance (1,000 iterations, server workload simulation)
+```
+Version                    Total Time   Ops/sec   Improvement  Single-call Overhead
+──────────────────────────────────────────────────────────────────────────────────────
+Original (baseline)        583ms        1,715     baseline     0.583ms per call
+Minimal C                  570ms        1,754     +2.3%        0.570ms per call
+Zero-copy I/O              568ms        1,761     +2.7%        0.568ms per call
+──────────────────────────────────────────────────────────────────────────────────────
+WINNER: Dynamic Assembly    267ms        3,745     +118%        0.267ms per call
+──────────────────────────────────────────────────────────────────────────────────────
+```
+
+**Real-World Impact:**
+- **Single call**: Dynamic Assembly is **0.342ms faster** (1.461ms → 1.119ms)
+- **Server load**: At 1000 calls/sec, saves **342ms/second** = **34.2% less CPU time**
+- **Scale**: At 1M calls/day, saves **5.7 minutes** of CPU time daily
+
+### How the Performance Gains Were Achieved
 
 The performance improvement comes from **systematic elimination of overhead**:
 
