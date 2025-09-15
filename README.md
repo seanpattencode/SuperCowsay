@@ -240,3 +240,16 @@ gcc -O3 -o cowsay_v1_buffer cowsay_v1_buffer.c
 **Performance is the only metric that matters.** This project explores every possible optimization technique, from high-level algorithmic improvements to bare-metal assembly programming. Security, portability, and maintainability are secondary concerns - this is pure performance engineering.
 
 The goal is to demonstrate how far you can push a simple program when performance is the absolute priority.
+
+---
+
+```
+ ___________________________________________________________________
+< I'm udderly optimized - from 50K instructions to moo-nimal 100! >
+ -------------------------------------------------------------------
+        \   ^__^
+         \  (oo)\_______
+            (__)\       )\/\
+                ||----w |
+                ||     ||
+```
