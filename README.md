@@ -11,7 +11,7 @@ This project demonstrates extreme performance optimization techniques by taking 
 - **94% syscall reduction** (from 34 C syscalls to 2 assembly syscalls)
 - **42% smaller binary** (9.8KB assembly vs 16.7KB C implementation)
 - **73% memory reduction** (392KB vs 1468KB max resident)
-- **Comprehensive bounds checking** (prevents buffer overflows)
+- **Supports arbitrary command-line messages** with built-in safety checks
 - **No external dependencies** (pure assembly, no libc)
 
 ```
@@ -71,8 +71,8 @@ time "Alternative Methods/original" "test message" >/dev/null
 The performance improvement comes from **systematic elimination of overhead**:
 
 1. **C Library Elimination**: Removed libc startup overhead (~200μs per execution)
-2. **Syscall Reduction**: 35+ syscalls → 2 syscalls (94% reduction)
-3. **Instruction Minimization**: ~5,000 instructions → ~100 instructions (98% reduction)
+2. **Syscall Reduction**: 34 syscalls → 2 syscalls (94% reduction)
+3. **Instruction Minimization**: ~114 assembly instructions (actual execution count varies by input)
 4. **Memory Optimization**: Zero heap allocations, minimal stack usage
 5. **Single-pass Algorithm**: Build complete output in one buffer, write once
 
@@ -127,7 +127,7 @@ _start:
 
 **2. Minimal Syscall Usage**
 - **2 syscalls total**: 1 write + 1 exit
-- Original uses 35+ syscalls for memory management, I/O buffering, cleanup
+- C implementation uses 34 syscalls for memory management, I/O buffering, cleanup
 - Each syscall has ~1-2μs kernel transition overhead
 
 **3. Single-Buffer Algorithm**
@@ -136,9 +136,10 @@ _start:
 - Eliminates buffer copying and memory allocations
 
 **4. Hand-Optimized Assembly**
-- Every instruction hand-chosen for efficiency
+- ~114 source instructions hand-chosen for efficiency
 - No function call overhead or stack frame management
 - Direct register-to-register operations where possible
+- Note: Source lines ≠ executed instructions (varies by input and control flow)
 
 **5. Cache-Friendly Memory Access**
 - Linear memory access patterns
@@ -275,23 +276,32 @@ gcc -O3 -o cowsay_v1_buffer cowsay_v1_buffer.c
 - **Assembly**: GNU AS (gas) with Intel syntax
 - **Test Data**: "The quick brown fox jumps over the lazy dog" (43 characters)
 
-### Current Limitations
-- **Input methods**: Command-line arguments only (no stdin support yet)
-- **Message wrapping**: No text wrapping for long messages (planned)
-- **Width control**: No `-w` width parameter support (planned)
-- **Portability**: x86-64 Linux only (assembly implementation)
-- **Maximum limits**:
-  - Single argument: 256 characters
-  - Total message: 1024 characters
-  - Output buffer: 4096 characters
-- **Error handling**: Exits with error code 1 on overflow
+## Project Scope & Limitations
 
-### Planned Features (Roadmap)
-- [ ] Stdin input support (`--stdin` flag)
-- [ ] Text wrapping for messages exceeding width
-- [ ] Width control parameter (`-w N`)
-- [ ] Multi-cow support (different cow files)
-- [ ] Cross-platform C fallback for non-x86_64 systems
+### What This Implementation Supports
+- **Command-line arguments**: Full support for arbitrary messages via command-line arguments
+- **Safety**: Comprehensive bounds checking prevents buffer overflows
+- **Performance**: Optimized for speed with 3.1x improvement over C implementation
+- **Reliability**: Proper error handling with meaningful exit codes
+
+### Current Limitations
+This version focuses on the common use-case of processing a single-line message from command-line arguments. It does **not** support:
+
+- **Stdin input**: No `--stdin` or pipe input support
+- **Text wrapping**: No word-wrapping for long messages
+- **Width control**: No `-w` width parameter support
+- **Alternate cow files**: Only supports the classic cow design
+- **Multi-line messages**: Designed for single-line output
+- **Cross-platform**: x86-64 Linux only (assembly implementation)
+
+### Technical Limits
+- **Maximum message length**: 1024 characters total
+- **Maximum argument length**: 256 characters per argument
+- **Output buffer**: 4096 characters maximum
+- **Error handling**: Exits with code 1 on input overflow
+
+### Design Philosophy
+This implementation prioritizes **performance over feature completeness**. The scope is intentionally limited to the most common cowsay usage pattern to achieve maximum optimization.
 
 ## Project Philosophy
 
@@ -324,7 +334,7 @@ This implementation respects the original cowsay project's GPL-3.0 license and p
 
 ```
  ___________________________________________________________________
-< I'm udderly optimized - from 50K instructions to moo-nimal 100! >
+< I'm udderly optimized - 3.1x faster with ~114 assembly instructions! >
  -------------------------------------------------------------------
         \   ^__^
          \  (oo)\_______
