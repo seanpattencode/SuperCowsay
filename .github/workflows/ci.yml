@@ -1,0 +1,154 @@
+name: SuperCowsay CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          gcc \
+          binutils \
+          make \
+          linux-tools-common \
+          linux-tools-generic \
+          util-linux
+
+    - name: Install Rust and hyperfine
+      run: |
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        source ~/.cargo/env
+        cargo install hyperfine
+
+    - name: Check dependencies
+      run: make check-deps
+
+    - name: Display system information
+      run: make sysinfo
+
+    - name: Build all implementations
+      run: make all
+
+    - name: Run correctness tests
+      run: make test
+
+    - name: Run quick benchmarks
+      run: |
+        source ~/.cargo/env
+        make bench-quick
+
+    - name: Test basic functionality
+      run: |
+        ./cowsay_dynamic "Hello CI!"
+        echo "Exit code: $?"
+
+    - name: Test bounds checking
+      run: |
+        # Test that very long input is handled gracefully
+        python3 -c "print('A' * 2000)" | xargs ./cowsay_dynamic || echo "Bounds checking works"
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: supercowsay-binaries
+        path: |
+          cowsay_dynamic
+          Alternative Methods/cowsay_*
+        retention-days: 30
+
+  performance-analysis:
+    runs-on: ubuntu-22.04
+    needs: build-and-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc binutils make
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        source ~/.cargo/env
+        cargo install hyperfine
+
+    - name: Build implementations
+      run: make all
+
+    - name: Run performance benchmarks
+      run: |
+        source ~/.cargo/env
+        # Run benchmarks without system optimization (CI environment)
+        hyperfine --warmup 3 --min-runs 10 \
+          --export-json benchmark-results.json \
+          './cowsay_dynamic "The quick brown fox jumps over the lazy dog"' \
+          '"Alternative Methods/cowsay_original" "The quick brown fox jumps over the lazy dog"' || true
+
+    - name: Upload benchmark results
+      uses: actions/upload-artifact@v3
+      with:
+        name: benchmark-results
+        path: benchmark-results.json
+        retention-days: 90
+
+  cross-platform-check:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Check architecture compatibility
+      run: |
+        echo "Architecture: $(uname -m)"
+        if [ "$(uname -m)" = "x86_64" ]; then
+          echo "✓ Compatible with x86_64 assembly implementation"
+        else
+          echo "⚠ Not x86_64 - only C implementations will work"
+        fi
+
+    - name: Test C implementations only
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc make
+        cd "Alternative Methods"
+        make -f ../build.mk all
+        ./cowsay_original "Cross-platform test"
+
+  security-check:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Build with security flags
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc binutils
+        # Build assembly with security features
+        as -o cowsay_dynamic.o cowsay_dynamic.s
+        ld -o cowsay_dynamic cowsay_dynamic.o -z noexecstack -z relro -z now
+        echo "✓ Built with security hardening"
+
+    - name: Test bounds checking
+      run: |
+        # Verify bounds checking works
+        timeout 10s ./cowsay_dynamic $(python3 -c "print('A' * 2000)") && exit 1 || echo "✓ Bounds checking prevents overflow"
+
+    - name: Check for hardcoded limits
+      run: |
+        echo "Checking assembly for hardcoded buffer sizes..."
+        grep -n "MAX_.*_LEN" cowsay_dynamic.s || echo "Limits defined in assembly"

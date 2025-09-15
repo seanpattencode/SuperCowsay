@@ -1,0 +1,49 @@
+MIT License
+
+Copyright (c) 2024 Sean Patten
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+
+COWSAY ASCII ART ATTRIBUTION
+
+The cow ASCII art used in this project is derived from the original cowsay
+program created by Tony Monroe (tony@nog.net).
+
+Original cowsay copyright:
+Copyright 1999-2002 Tony Monroe
+Copyright 2016-2024 Andrew Janke
+Copyright 2022-2024 Cowsay contributors on GitHub
+
+Original cowsay is licensed under GNU General Public License version 3.
+See: https://github.com/cowsay-org/cowsay
+
+The specific cow art pattern used:
+        \   ^__^
+         \  (oo)\_______
+            (__)\       )\/\
+                ||----w |
+                ||     ||
+
+This ASCII art is used with respect to the original cowsay project's GPL-3.0
+license and with full attribution to Tony Monroe and the cowsay contributors.
+
+For compatibility, the cow art portion may be considered available under
+GPL-3.0 terms while the SuperCowsay implementation code remains under MIT.

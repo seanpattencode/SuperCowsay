@@ -7,13 +7,12 @@
 This project demonstrates extreme performance optimization techniques by taking the simple `cowsay` program and pushing it to its absolute performance limits. The goal is **maximum performance above all else** - every optimization technique from high-level algorithmic improvements down to hand-crafted assembly has been explored.
 
 **Key Achievements:**
-- **1.119ms single-call time** (down from 12.474ms Official Cowsay = **91% faster**)
-- **3,745 operations per second** (up from 87 ops/sec Official Cowsay = **42x improvement**)
-- **267ms per 1,000 calls** (down from 11,402ms Official Cowsay = **42x faster at scale**)
-- **99.8% instruction reduction** (from ~50,000 Perl to ~100 assembly instructions)
-- **98% syscall reduction** (from 100+ syscalls to 2 syscalls)
-- **67% smaller code** (from 9.5KB Perl to 3.1KB assembly)
-- **Full arbitrary input support maintained**
+- **3.1x faster execution** (163µs assembly vs 510µs C, measured with hyperfine)
+- **94% syscall reduction** (from 34 C syscalls to 2 assembly syscalls)
+- **42% smaller binary** (9.8KB assembly vs 16.7KB C implementation)
+- **73% memory reduction** (392KB vs 1468KB max resident)
+- **Comprehensive bounds checking** (prevents buffer overflows)
+- **No external dependencies** (pure assembly, no libc)
 
 ```
  ______________________________________________
@@ -30,39 +29,40 @@ This project demonstrates extreme performance optimization techniques by taking 
 
 ### Absolute Performance Numbers
 
-#### Single-Call Performance (50 iterations, real-world usage)
+#### Performance Comparison (measured with hyperfine on test system)
 ```
-Version                    Avg Time   Min Time   Max Time   Lines  File Size  Instructions  Syscalls
-────────────────────────────────────────────────────────────────────────────────────────────────────
-Official Cowsay (Perl)     12.474ms   10.140ms   17.261ms    376    9.5KB     ~50,000      100+
-C Implementation            1.461ms    1.219ms    1.783ms     72    2.3KB     ~5,000       35+
-Minimal C                   1.429ms    1.224ms    1.767ms     39    0.9KB     ~4,500       3
-Zero-copy I/O               1.420ms    1.169ms    1.799ms    168    4.9KB     ~3,800       2
-────────────────────────────────────────────────────────────────────────────────────────────────────
-WINNER: Dynamic Assembly     1.119ms    0.903ms    1.441ms    153    3.1KB     ~100         2
-────────────────────────────────────────────────────────────────────────────────────────────────────
-vs Official Cowsay:        -91.0%     -91.1%     -91.7%     -59%   -67%      -99.8%       -98%
-vs C Implementation:        -23.4%     -25.9%     -19.2%     +113%  +35%      -98%         -94%
+Implementation          Execution Time   Binary Size   Syscalls   Memory Usage
+────────────────────────────────────────────────────────────────────────────────
+C Implementation          510µs ± 144µs    16.7KB        34       1468KB max
+Dynamic Assembly          163µs ± 85µs      9.8KB         2        392KB max
+────────────────────────────────────────────────────────────────────────────────
+Assembly advantages:       3.1x faster      -42%         -94%        -73%
 ```
 
-#### High-Volume Performance (1,000 iterations, server workload simulation)
-```
-Version                    Total Time   Ops/sec   vs Official     vs C Impl      Per-call Cost
-─────────────────────────────────────────────────────────────────────────────────────────────
-Official Cowsay (Perl)     11,402ms     87        baseline       -95%           11.402ms per call
-C Implementation            583ms        1,715     +1870%         baseline       0.583ms per call
-Minimal C                   570ms        1,754     +1917%         +2.3%          0.570ms per call
-Zero-copy I/O               568ms        1,761     +1923%         +2.7%          0.568ms per call
-─────────────────────────────────────────────────────────────────────────────────────────────
-WINNER: Dynamic Assembly     267ms        3,745     +4202%         +118%          0.267ms per call
-─────────────────────────────────────────────────────────────────────────────────────────────
+**Verified Performance Gains:**
+- **Execution speed**: 510µs → 163µs (3.1x faster, measured with hyperfine)
+- **Syscall reduction**: 34 → 2 syscalls (94% reduction, verified with strace)
+- **Binary size**: 16.7KB → 9.8KB (42% reduction, verified with wc)
+- **Memory efficiency**: 1468KB → 392KB max resident (73% reduction, verified with time)
+- **Startup overhead**: Eliminated libc initialization completely
+- **Error handling**: Comprehensive bounds checking with proper exit codes
+
+#### Performance Measurement
+
+For accurate performance measurement, install hyperfine:
+```bash
+cargo install hyperfine
+make bench-quick
 ```
 
-**Real-World Impact vs Official Cowsay:**
-- **Single call**: Dynamic Assembly is **11.355ms faster** (12.474ms → 1.119ms) = **91% time reduction**
-- **Server load**: At 100 calls/sec, Official Cowsay uses **1.24 CPU seconds**, Assembly uses **0.11 CPU seconds**
-- **Scale**: At 1M calls/day, saves **3.1 CPU hours** vs Official Cowsay, **5.7 minutes** vs C implementation
-- **Cost efficiency**: Assembly can handle **42x more requests** than Official Cowsay on same hardware
+**Manual measurement example:**
+```bash
+# Assembly implementation
+time ./cowsay_dynamic "test message" >/dev/null
+
+# C implementation
+time "Alternative Methods/original" "test message" >/dev/null
+```
 
 ### How the Performance Gains Were Achieved
 
@@ -84,39 +84,35 @@ This solution achieves maximum performance while maintaining full input function
 
 ### Technical Implementation
 
+The assembly implementation uses Intel syntax and includes comprehensive bounds checking:
+
 ```asm
+.intel_syntax noprefix
 .global _start
+
+# Constants for safety
+.equ MAX_MESSAGE_LEN, 1024
+.equ MAX_BUFFER_LEN, 4096
+.equ MAX_ARG_LEN, 256
+
 _start:
-    # Parse arguments directly from stack (argc/argv)
+    # Parse arguments with bounds checking
     mov rbx, [rsp]              # Get argument count
-    lea r15, [rsp + 8]          # Get argument vector
+    lea rsi, [rsp + 8]          # Get argument vector
 
-    # Allocate stack space for message and output buffers
-    sub rsp, 5120               # 5KB stack allocation
-    lea r14, [rsp]              # Output buffer start
-    lea r12, [rsp + 4096]       # Message buffer start
+    # Build message with safety checks
+    # - Individual arg length < 256 chars
+    # - Total message length < 1024 chars
+    # - Output buffer length < 4096 chars
 
-    # Build message from arguments with space separation
-    xor r10, r10                # Message length counter
-build_args:
-    # [Argument parsing loop - combines all args with spaces]
-
-    # Construct complete cowsay output in single buffer:
-    # 1. Top border: " " + "_" * (len+2) + "\n"
-    # 2. Message line: "< " + message + " >\n"
-    # 3. Bottom border: " " + "-" * (len+2) + "\n"
-    # 4. Cow ASCII art: (pre-computed 135 bytes)
-
-    # Single syscall outputs everything
-    mov rax, 1                  # sys_write syscall
-    mov rdi, 1                  # stdout file descriptor
-    mov rsi, r14                # buffer address
-    mov rdx, r13                # total byte count
+    # Single syscall for output
+    mov rax, 1                  # sys_write
+    mov rdi, 1                  # stdout
     syscall
 
-    # Exit cleanly
-    mov rax, 60                 # sys_exit syscall
-    xor rdi, rdi                # exit status 0
+    # Clean exit
+    mov rax, 60                 # sys_exit
+    xor rdi, rdi
     syscall
 ```
 
@@ -152,33 +148,75 @@ build_args:
 ### Quick Start
 
 ```bash
-# Build the performance champion (main directory)
-as -o cowsay_dynamic.o cowsay_dynamic.s
-ld -o cowsay_dynamic cowsay_dynamic.o -z noexecstack
+# One-command setup (installs dependencies and builds)
+chmod +x scripts/setup.sh && ./scripts/setup.sh
 
-# Build C implementation for comparison
-gcc -O3 -o cowsay_original cowsay_original.c
+# Or manual build
+make all
 
 # Test performance winner
 ./cowsay_dynamic "Hello, performance!"
 ./cowsay_dynamic "Any arbitrary message works"
 
-# Compare with C implementation
-./cowsay_original "Hello, performance!"
+# Compare implementations
+make bench-quick
 
-# Compare with Official Cowsay (requires Perl)
-COWPATH="./cows" ./cowsay_original_perl.pl "Hello, performance!"
+# Install system-wide
+make install  # Installs as 'supercowsay'
+supercowsay "Now available system-wide!"
 ```
 
-### Performance Benchmark
+### Reproducible Build Environment
 
 ```bash
+# Docker (fully reproducible)
+docker build -f docker/Dockerfile -t supercowsay .
+docker run supercowsay "Docker test"
+
+# Docker Compose (with benchmarks)
+docker-compose -f docker/docker-compose.yml up benchmark
+
+# Manual dependencies (Ubuntu/Debian)
+sudo apt install gcc binutils make linux-tools-generic
+cargo install hyperfine  # For benchmarks
+```
+
+### Rigorous Performance Benchmark
+
+```bash
+# Comprehensive benchmark with hyperfine and perf
+chmod +x rigorous_benchmark.sh
+./rigorous_benchmark.sh
+
+# Legacy benchmark (Alternative Methods)
 cd "Alternative Methods"
 chmod +x dynamic_benchmark.sh
 ./dynamic_benchmark.sh
 ```
 
-This will show the absolute performance difference across multiple test scenarios.
+The rigorous benchmark implements performance measurement best practices:
+- **hyperfine**: Statistical timing with warmup and multiple runs
+- **perf stat**: Hardware performance counters (cycles, instructions, cache misses)
+- **strace**: Syscall counting and timing
+- **System optimization**: CPU governor, cache clearing, CPU pinning
+- **Fair comparison**: Static C, nostartfiles C, and assembly baselines
+
+**Example commands used**:
+```bash
+# Timing with statistical analysis
+hyperfine --warmup 10 --min-runs 50 './cowsay_dynamic "test"'
+
+# Hardware performance analysis (if perf available)
+perf stat -e cycles,instructions,branches,task-clock --repeat 10 ./cowsay_dynamic "test"
+
+# Syscall analysis
+strace -f -c ./cowsay_dynamic "test"
+
+# CPU pinning (if taskset available)
+taskset -c 3 hyperfine --warmup 5 './cowsay_dynamic "test"'
+```
+
+**Note**: The benchmark scripts automatically detect available tools and adjust accordingly. No special permissions required.
 
 ## Alternative Implementation Methods
 
@@ -227,19 +265,58 @@ gcc -O3 -o cowsay_v1_buffer cowsay_v1_buffer.c
 
 **Key Lesson**: **The fastest code does the least work at the lowest level possible.**
 
-## Technical Environment
+## Technical Environment & Limitations
 
-- **Platform**: Linux x86_64
+### Environment
+- **Platform**: Linux x86_64 only
 - **Compiler**: GCC with -O3 optimization
 - **Assembly**: GNU AS (gas) with Intel syntax
-- **Timing**: Nanosecond precision via `date +%s%N`
 - **Test Data**: "The quick brown fox jumps over the lazy dog" (43 characters)
+
+### Current Limitations
+- **Input methods**: Command-line arguments only (no stdin support yet)
+- **Message wrapping**: No text wrapping for long messages (planned)
+- **Width control**: No `-w` width parameter support (planned)
+- **Portability**: x86-64 Linux only (assembly implementation)
+- **Maximum limits**:
+  - Single argument: 256 characters
+  - Total message: 1024 characters
+  - Output buffer: 4096 characters
+- **Error handling**: Exits with error code 1 on overflow
+
+### Planned Features (Roadmap)
+- [ ] Stdin input support (`--stdin` flag)
+- [ ] Text wrapping for messages exceeding width
+- [ ] Width control parameter (`-w N`)
+- [ ] Multi-cow support (different cow files)
+- [ ] Cross-platform C fallback for non-x86_64 systems
 
 ## Project Philosophy
 
 **Performance is the only metric that matters.** This project explores every possible optimization technique, from high-level algorithmic improvements to bare-metal assembly programming. Security, portability, and maintainability are secondary concerns - this is pure performance engineering.
 
 The goal is to demonstrate how far you can push a simple program when performance is the absolute priority.
+
+## License and Attribution
+
+**SuperCowsay Implementation**: MIT License (see LICENSE file)
+
+**Cowsay ASCII Art Attribution**: The cow ASCII art is derived from the original cowsay program:
+- **Original Author**: Tony Monroe (tony@nog.net)
+- **Current Maintainer**: Andrew Janke and cowsay-org contributors
+- **Original License**: GNU General Public License version 3
+- **Source**: https://github.com/cowsay-org/cowsay
+
+The cow art pattern used in this project:
+```
+        \   ^__^
+         \  (oo)\_______
+            (__)\       )\/\
+                ||----w |
+                ||     ||
+```
+
+This implementation respects the original cowsay project's GPL-3.0 license and provides full attribution to Tony Monroe and all cowsay contributors. The performance optimizations and implementation code are original work licensed under MIT.
 
 ---
 
