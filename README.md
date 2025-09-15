@@ -332,6 +332,8 @@ This implementation respects the original cowsay project's GPL-3.0 license and p
 
 ---
 
+And now, a special message from our cow:
+
 ```
  ___________________________________________________________________
 < I'm udderly optimized - 3.1x faster with ~114 assembly instructions! >
