@@ -55,6 +55,8 @@ cargo install hyperfine
 make bench-quick
 ```
 
+**Note**: The rigorous benchmark may show perf permission errors - this is normal Linux security and doesn't affect the core timing results.
+
 **Manual measurement example:**
 ```bash
 # Assembly implementation
