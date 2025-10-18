@@ -4,13 +4,15 @@
 
 ## Project Goals
 
-This project demonstrates extreme performance optimization techniques by taking the simple `cowsay` program and pushing it to its absolute performance limits. The goal is **maximum performance above all else** - every optimization technique from high-level algorithmic improvements down to hand-crafted assembly has been explored.
+This project demonstrates extreme performance optimization techniques by taking the simple `cowsay` program and pushing it to its absolute performance limits. The goal is **maximum performance above all else** - many optimization techniques from high-level algorithmic improvements down to hand-crafted assembly have been explored.
 
 **Key Achievements:**
-- **3.1x faster execution** (163µs assembly vs 510µs C, measured with hyperfine)
-- **94% syscall reduction** (from 34 C syscalls to 2 assembly syscalls)
-- **42% smaller binary** (9.8KB assembly vs 16.7KB C implementation)
-- **73% memory reduction** (392KB vs 1468KB max resident)
+- **75x faster than original Perl** (160µs assembly vs 11,974µs Perl, measured with hyperfine)
+- **2.4x faster than C implementation** (160µs assembly vs 376µs C, measured with hyperfine)
+- **99.7% syscall reduction vs Perl** (from 676 Perl syscalls to 2 assembly syscalls)
+- **94.3% syscall reduction vs C** (from 35 C syscalls to 2 assembly syscalls)
+- **95.4% memory reduction vs Perl** (392KB vs 8428KB max resident)
+- **73.3% memory reduction vs C** (392KB vs 1468KB max resident)
 - **Supports arbitrary command-line messages** with built-in safety checks
 - **No external dependencies** (pure assembly, no libc)
 
@@ -29,23 +31,39 @@ This project demonstrates extreme performance optimization techniques by taking 
 
 ### Absolute Performance Numbers
 
-#### Performance Comparison (measured with hyperfine on test system)
+#### Comprehensive Performance Comparison (measured with hyperfine on test system)
 ```
-Implementation          Execution Time   Binary Size   Syscalls   Memory Usage
-────────────────────────────────────────────────────────────────────────────────
-C Implementation          510µs ± 144µs    16.7KB        34       1468KB max
-Dynamic Assembly          163µs ± 85µs      9.8KB         2        392KB max
-────────────────────────────────────────────────────────────────────────────────
-Assembly advantages:       3.1x faster      -42%         -94%        -73%
+Implementation          Execution Time      Binary Size   Syscalls   Memory Usage
+──────────────────────────────────────────────────────────────────────────────────
+Perl Original          11,974µs ± 2,102µs      9.5KB       676       8428KB max
+C Implementation          376µs ±   70µs        17KB        35       1468KB max
+Assembly Dynamic          160µs ±   61µs       9.6KB         2        392KB max
+──────────────────────────────────────────────────────────────────────────────────
+Assembly vs Perl:         75x faster          similar     -99.7%      -95.4%
+Assembly vs C:           2.4x faster          -43.5%      -94.3%      -73.3%
+C vs Perl:              31.8x faster          +79%        -94.8%      -82.6%
 ```
 
 **Verified Performance Gains:**
-- **Execution speed**: 510µs → 163µs (3.1x faster, measured with hyperfine)
-- **Syscall reduction**: 34 → 2 syscalls (94% reduction, verified with strace)
-- **Binary size**: 16.7KB → 9.8KB (42% reduction, verified with wc)
-- **Memory efficiency**: 1468KB → 392KB max resident (73% reduction, verified with time)
+
+**Assembly vs Original Perl:**
+- **Execution speed**: 11,974µs → 160µs (**75x faster**, measured with hyperfine)
+- **Syscall reduction**: 676 → 2 syscalls (**99.7% reduction**, verified with strace)
+- **Memory efficiency**: 8428KB → 392KB max resident (**95.4% reduction**, verified with /usr/bin/time)
+- **Binary size**: 9.5KB → 9.6KB (comparable script/binary size)
+
+**Assembly vs C Implementation:**
+- **Execution speed**: 376µs → 160µs (**2.4x faster**, measured with hyperfine)
+- **Syscall reduction**: 35 → 2 syscalls (**94.3% reduction**, verified with strace)
+- **Binary size**: 17KB → 9.6KB (**43.5% smaller**, verified with ls)
+- **Memory efficiency**: 1468KB → 392KB max resident (**73.3% reduction**, verified with /usr/bin/time)
 - **Startup overhead**: Eliminated libc initialization completely
 - **Error handling**: Comprehensive bounds checking with proper exit codes
+
+**C vs Original Perl:**
+- **Execution speed**: 11,974µs → 376µs (**31.8x faster**, measured with hyperfine)
+- **Syscall reduction**: 676 → 35 syscalls (**94.8% reduction**, verified with strace)
+- **Memory efficiency**: 8428KB → 1468KB max resident (**82.6% reduction**, verified with /usr/bin/time)
 
 #### Performance Measurement
 
@@ -335,9 +353,9 @@ This implementation respects the original cowsay project's GPL-3.0 license and p
 And now, a special message from our cow:
 
 ```
- ___________________________________________________________________
-< I'm udderly optimized - 3.1x faster with ~114 assembly instructions! >
- -------------------------------------------------------------------
+ ______________________________________________________________________
+< I'm udderly optimized - 75x faster than Perl, 2.4x faster than C! >
+ ----------------------------------------------------------------------
         \   ^__^
          \  (oo)\_______
             (__)\       )\/\
