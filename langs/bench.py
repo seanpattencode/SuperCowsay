@@ -6,6 +6,7 @@
 # · PYPL IDE/Online-IDE indices (editors, not runtimes — nothing to execute cowsay in).
 #   python3 langs/bench.py setup [--yes]   check toolchains; print (--yes: run) install + DB provisioning
 #   python3 langs/bench.py                 build + verify byte-identical vs ./cowsay_dynamic + hyperfine
+#   python3 langs/bench.py android         push Kotlin DEX + Zig arm64 to adb device, verify + time on ART vs native
 import json,os,shlex,shutil,subprocess,sys
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 for p in ("~/.local/share/swiftly/bin","~/.local/dart-sdk/bin"):os.environ["PATH"]+=os.pathsep+os.path.expanduser(p)
@@ -92,6 +93,36 @@ if sys.argv[1:2]==["setup"]:
             if h.startswith("snap "):sh("sudo "+h)
         for t,c in PROV:
             if shutil.which(t):sh(c)
+    sys.exit(0)
+if sys.argv[1:2]==["android"]:
+    import glob
+    if sh("adb get-state",capture_output=True).returncode:sys.exit("no adb device (plug in + USB debugging; check `adb devices`)")
+    d8=(sorted(glob.glob(os.path.expanduser("~/Android/Sdk/build-tools/*/d8")))or[shutil.which("d8")])[-1]
+    if not d8:sys.exit("d8 missing: sdkmanager 'build-tools;36.1.0'")
+    A=f"{B}/android";os.makedirs(A,exist_ok=True)
+    os.path.exists(f"{B}/cowsay_kt.jar")or sh(f"kotlinc langs/cowsay.kt -include-runtime -d {B}/cowsay_kt.jar",check=True)
+    sh(f"{d8} --release --output {A} {B}/cowsay_kt.jar",capture_output=True,check=True)
+    sh(f"z=/snap/zig/current/zig; [ -x $z ] || z=zig; $z build-exe -lc -O ReleaseFast -target aarch64-linux-musl -femit-bin={A}/cowsay_zig_arm64 langs/cowsay.zig",check=True)
+    sh(f"adb push {A}/classes.dex /data/local/tmp/cowsay_kt.dex && adb push {A}/cowsay_zig_arm64 /data/local/tmp/ && adb shell chmod 755 /data/local/tmp/cowsay_zig_arm64",capture_output=True,check=True)
+    ref=sh(["./cowsay_dynamic",MSG],capture_output=True).stdout
+    print("device: "+sh("adb shell getprop ro.product.model",capture_output=True).stdout.strip())
+    ROWS=[("exec floor (toybox true)","/system/bin/true",200,None),  # dynamic-link exec cost every row pays
+     ("Zig arm64 static",f"/data/local/tmp/cowsay_zig_arm64 '{MSG}'",200,["adb","exec-out","/data/local/tmp/cowsay_zig_arm64",MSG]),
+     ("Kotlin ART (dalvikvm64)",f"dalvikvm64 -cp /data/local/tmp/cowsay_kt.dex CowsayKt '{MSG}'",5,
+      ["adb","exec-out","dalvikvm64","-cp","/data/local/tmp/cowsay_kt.dex","CowsayKt",MSG])]
+    res=[]
+    for n,c,it,ver in ROWS:
+        if ver:
+            v=sh(ver,capture_output=True)
+            print(("ok   " if v.stdout==ref else "FAIL ")+n+": output "+("byte-identical" if v.stdout==ref else "DIFFERS"))
+            if v.stdout!=ref:continue
+        o=sh(f"adb shell \"date +%s%N; i=0; while [ \\$i -lt {it} ]; do {c} >/dev/null 2>&1; i=\\$((i+1)); done; date +%s%N\"",capture_output=True)
+        a,b=[int(x)for x in o.stdout.split()]  # host math: device mksh arithmetic is 32-bit, ns stamps wrap
+        res.append((n,(b-a)/it/1000))
+    base=next((u for n,u in res if n.startswith("Zig")),res[0][1])
+    print(f"\n{'on-device':26}{'mean':>12}{'vs zig':>9}")
+    for n,us in res:print(f"{n:26}{us:>10.1f}µs{us/base:>8.1f}x")
+    print("desktop rows for comparison: python3 langs/bench.py")
     sys.exit(0)
 os.makedirs(B,exist_ok=True)
 open(SQ,"w").write(open("langs/cowsay.sql").read().replace("__MSG__",MSG.replace("'","''")))

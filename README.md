@@ -248,7 +248,20 @@ Not implementable: VBA (needs an Office host), ABAP (SAP-proprietary), Oracle/SQ
 ```bash
 python3 langs/bench.py setup        # check toolchains, print install commands (--yes to run them)
 python3 langs/bench.py              # build + verify byte-identical output + hyperfine bench vs assembly
+python3 langs/bench.py android      # push Kotlin DEX + Zig arm64 to an adb device, verify + time on ART vs native
 ```
+
+### On-Device: Kotlin on Android (Pixel 10 Pro)
+
+Kotlin is the first-class language of the world's most-installed OS, so `bench.py android` measures it on the OS's own hardware: the same `cowsay.kt` compiles to a jar, `d8` converts it to DEX, adb pushes it, and it runs directly on ART via `dalvikvm64 -cp` — no APK. A static Zig arm64-musl cross-build of the same cowsay provides the native floor on the same phone. Both verified byte-identical to `cowsay_dynamic` before timing. Pixel 10 Pro, Android 17, timed on-device with its ns clock (adb round-trip excluded):
+
+| on-device | mean | vs native floor |
+|---|---|---|
+| Zig arm64 static | 6,309µs | 1.0x |
+| exec floor (toybox `true`) | 37,045µs | 5.9x |
+| Kotlin on ART (`dalvikvm64`) | 319,576µs | 50.7x |
+
+Kotlin cold-start on Android's own silicon is ~320ms per invocation — ~9x its desktop-JVM number (36ms) and ~2,770x the x86 assembly baseline. Installed apps dodge this via zygote pre-forking and AOT compilation — infrastructure that exists precisely because this cost is unbearable at OS scale. Two side findings from the experiment: Android's dynamically-linked `true` takes 37ms to exec, so a static binary beats the OS's smallest utility by 5.9x; and Android's `mksh` does 32-bit shell arithmetic, so nanosecond timestamps wrap — the bench does its timing math host-side.
 
 ## Alternative Implementation Methods
 
