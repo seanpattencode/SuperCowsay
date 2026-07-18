@@ -1,0 +1,1 @@
+SELECT CONCAT(' ',REPEAT('_',CHAR_LENGTH(@m)+2),'\n< ',@m,' >\n ',REPEAT('-',CHAR_LENGTH(@m)+2),'\n        \\   ^__^\n         \\  (oo)\\_______\n            (__)\\       )\\/\\\n                ||----w |\n                ||     ||');

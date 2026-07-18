@@ -239,6 +239,17 @@ taskset -c 3 hyperfine --warmup 5 './cowsay_dynamic "test"'
 
 **Note**: The benchmark scripts automatically detect available tools and adjust accordingly. No special permissions required.
 
+## Polyglot Benchmark — Full PYPL Index
+
+`langs/` holds the same cowsay in every implementable language of the PYPL index (Jul 2026 ranks 1-30: Python, Java, C, C++, R, JavaScript, Objective-C, PHP, C#, Rust, Swift, Ada, TypeScript, Matlab via Octave, PowerShell, Ruby, Kotlin, Dart, Lua, Go, Julia, Scala, Delphi/Pascal via FPC, Visual Basic via .NET, Zig, Perl original, Haskell, Groovy, Cobol) plus APL and AWK, plus the PYPL DB-index representatives runnable locally (SQLite, MySQL, PostgreSQL, Redis) — all byte-identical output to `cowsay_dynamic`, verified before timing. One Python script installs toolchains (apt + snap + DB user provisioning with `--yes`) and runs the bench.
+
+Not implementable: VBA (needs an Office host), ABAP (SAP-proprietary), Oracle/SQL Server/Db2 (proprietary servers), MongoDB (not in Ubuntu archives), and PYPL's IDE/Online-IDE indices (editors, not runtimes — nothing to execute cowsay in).
+
+```bash
+python3 langs/bench.py setup        # check toolchains, print install commands (--yes to run them)
+python3 langs/bench.py              # build + verify byte-identical output + hyperfine bench vs assembly
+```
+
 ## Alternative Implementation Methods
 
 All alternative optimization approaches are available in the `Alternative Methods/` directory.
