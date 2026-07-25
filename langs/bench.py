@@ -7,13 +7,16 @@
 #   python3 langs/bench.py setup [--yes]   check toolchains; print (--yes: run) install + DB provisioning
 #   python3 langs/bench.py                 build + verify byte-identical vs ./cowsay_dynamic + hyperfine
 #   python3 langs/bench.py android         push Kotlin DEX + Zig arm64 to adb device, verify + time on ART vs native
+#   python3 langs/bench.py windows [user@host] [port]   ssh to a Windows box (WSL interop): in-box csc/vbc + PS 5.1 + Zig floor
 import json,os,shlex,shutil,subprocess,sys
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-for p in ("~/.local/share/swiftly/bin","~/.local/dart-sdk/bin"):os.environ["PATH"]+=os.pathsep+os.path.expanduser(p)
+for p in ("~/.local/share/swiftly/bin","~/.local/dart-sdk/bin","~/.local/kotlin-native-prebuilt-linux-x86_64-2.4.10/bin"):
+    os.environ["PATH"]+=os.pathsep+os.path.expanduser(p)
 B="langs/build";SQ=f"{B}/cowsay_gen.sql";MSG="The quick brown fox jumps over the lazy dog"
 SWIFT="no apt pkg — swift.org/install: curl -O https://download.swift.org/swiftly/linux/swiftly-$(uname -m).tar.gz && tar xf swiftly-*.tar.gz && ./swiftly init --assume-yes  # too-new Ubuntu: add --platform ubuntu24.04"
 DART="no apt/snap — dart.dev: curl -LO https://storage.googleapis.com/dart-archive/channels/stable/release/latest/sdk/dartsdk-linux-x64-release.zip && unzip -q dartsdk-*.zip -d ~/.local"
 APLH="GNU APL left Debian/Ubuntu archives — build from source: curl -sO https://ftp.gnu.org/gnu/apl/apl-2.0.tar.gz && tar xf apl-2.0.tar.gz && cd apl-2.0 && ./configure --prefix=$HOME/.local && make -j$(nproc) && make install"
+KNH="no pkg — JetBrains prebuilt: curl -sLO https://github.com/JetBrains/kotlin/releases/download/v2.4.10/kotlin-native-prebuilt-linux-x86_64-2.4.10.tar.gz && tar xzf kotlin-native-prebuilt-*.tar.gz -C ~/.local"
 def sh(c,**k):return subprocess.run(c,shell=isinstance(c,str),text=True,**k)
 L=[ # name, pypl rank, required tools, install hint (apt pkgs unless snap/URL), build, run argv (MSG appended unless DB special)
 ("Assembly","-",["as","ld"],"binutils","make cowsay_dynamic",["./cowsay_dynamic"]),
@@ -39,6 +42,8 @@ L=[ # name, pypl rank, required tools, install hint (apt pkgs unless snap/URL), 
 ("Ruby","15",["ruby"],"ruby",None,["ruby","langs/cowsay.rb"]),
 ("Kotlin","17",["kotlinc","java"],"snap install kotlin --classic",f"kotlinc langs/cowsay.kt -include-runtime -d {B}/cowsay_kt.jar",
  ["java","-jar",f"{B}/cowsay_kt.jar"]),
+("Kotlin/Native","17",["kotlinc-native"],KNH,  # same language, VM removed; build once (LLVM compile is slow)
+ f"[ -x {B}/cowsay_ktn.kexe ] || kotlinc-native langs/cowsay.kt -opt -o {B}/cowsay_ktn",[f"{B}/cowsay_ktn.kexe"]),
 ("Dart","18",["dart"],DART,f"dart compile exe -o {B}/cowsay_dart langs/cowsay.dart",[f"{B}/cowsay_dart"]),
 ("Lua","19",["lua5.4"],"lua5.4",None,["lua5.4","langs/cowsay.lua"]),
 ("Go","20",["go"],"golang-go",f"go build -o {B}/cowsay_go langs/cowsay.go",[f"{B}/cowsay_go"]),
@@ -82,7 +87,7 @@ if sys.argv[1:2]==["setup"]:
     for l in L:
         m=miss(l)
         print(f"{'MISSING' if m else 'ok':8}{l[0]:13}"+(f" {' '.join(m)}  ({l[3]})" if m else ""))
-        if m:(man if l[3].startswith("snap ") or l[3] in(SWIFT,DART,APLH) else apt).append(l[3])
+        if m:(man if l[3].startswith("snap ") or l[3] in(SWIFT,DART,APLH,KNH) else apt).append(l[3])
     print("\nnot implementable: VBA (Office host) · ABAP (SAP) · Oracle/SQLServer/Db2 (proprietary) · MongoDB (not in archives) · IDE/Online-IDE indices (editors, not runtimes)")
     if apt:
         c="sudo apt-get install -y "+" ".join(dict.fromkeys(" ".join(a.split("#")[0] for a in apt).split()))
@@ -110,6 +115,11 @@ if sys.argv[1:2]==["android"]:
      ("Zig arm64 static",f"/data/local/tmp/cowsay_zig_arm64 '{MSG}'",200,["adb","exec-out","/data/local/tmp/cowsay_zig_arm64",MSG]),
      ("Kotlin ART (dalvikvm64)",f"dalvikvm64 -cp /data/local/tmp/cowsay_kt.dex CowsayKt '{MSG}'",5,
       ["adb","exec-out","dalvikvm64","-cp","/data/local/tmp/cowsay_kt.dex","CowsayKt",MSG])]
+    if shutil.which("kotlinc-native"):
+        sh(f"[ -x {A}/cowsay_ktn_arm64.kexe ] || kotlinc-native langs/cowsay.kt -opt -target android_arm64 -o {A}/cowsay_ktn_arm64",check=True)
+        sh(f"adb push {A}/cowsay_ktn_arm64.kexe /data/local/tmp/ && adb shell chmod 755 /data/local/tmp/cowsay_ktn_arm64.kexe",capture_output=True,check=True)
+        ROWS.insert(2,("Kotlin/Native arm64",f"/data/local/tmp/cowsay_ktn_arm64.kexe '{MSG}'",100,
+         ["adb","exec-out","/data/local/tmp/cowsay_ktn_arm64.kexe",MSG]))
     res=[]
     for n,c,it,ver in ROWS:
         if ver:
@@ -123,6 +133,37 @@ if sys.argv[1:2]==["android"]:
     print(f"\n{'on-device':26}{'mean':>12}{'vs zig':>9}")
     for n,us in res:print(f"{n:26}{us:>10.1f}µs{us/base:>8.1f}x")
     print("desktop rows for comparison: python3 langs/bench.py")
+    sys.exit(0)
+if sys.argv[1:2]==["windows"]:  # ssh-driven, mirrors android mode; args passed as bare words (ports join argv)
+    T=sys.argv[2] if len(sys.argv)>2 else "seanpatten@192.168.1.184";P=sys.argv[3] if len(sys.argv)>3 else "2222"
+    SSH=f"ssh -o BatchMode=yes -o ConnectTimeout=8 -p {P} {T}"
+    up=sh(f"{SSH} \"/mnt/c/Windows/System32/cmd.exe /c 'echo %USERPROFILE%' 2>/dev/null | tr -d '\\r'\"",capture_output=True).stdout.strip()
+    if not up.startswith("C:"):sys.exit(f"no Windows interop at {T} -p {P} (need sshd inside WSL2 on a Windows box)")
+    W="/mnt/c/"+up[3:].replace("\\","/")+"/cowsay-bench"
+    os.makedirs(B,exist_ok=True)
+    sh(f"z=/snap/zig/current/zig; [ -x $z ] || z=zig; $z build-exe -lc -O ReleaseFast -target x86_64-windows-gnu -femit-bin={B}/cowsay_zig_win.exe langs/cowsay.zig",check=True)
+    sh(f"{SSH} 'mkdir -p {W}' && scp -q -P {P} {B}/cowsay_zig_win.exe langs/Cowsay.cs langs/cowsay.vb langs/cowsay.ps1 {T}:{W}/",check=True)
+    FW="/mnt/c/Windows/Microsoft.NET/Framework64/v4.0.30319"
+    r=sh(f"{SSH} 'cd {W} && {FW}/csc.exe /nologo /optimize /out:cowsay_cs.exe Cowsay.cs && {FW}/vbc.exe /nologo /optimize /out:cowsay_vb.exe cowsay.vb'",capture_output=True)
+    if r.returncode:sys.exit("remote compile failed: "+(r.stdout+r.stderr)[-400:])
+    ref=sh(["./cowsay_dynamic",MSG],capture_output=True).stdout
+    PSW=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+    ROWS=[("Zig win-x64 static (floor)","cowsay_zig_win.exe",200,"./cowsay_zig_win.exe"),
+     ("C# .NET Framework (in-box csc)","cowsay_cs.exe",50,"./cowsay_cs.exe"),
+     ("VB.NET Framework (in-box vbc)","cowsay_vb.exe",50,"./cowsay_vb.exe"),
+     ("PowerShell 5.1",PSW+" -NoProfile -ExecutionPolicy Bypass -File cowsay.ps1",10,
+      "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File cowsay.ps1")]
+    res=[]
+    for n,cw,it,ver in ROWS:
+        v=sh(f"{SSH} 'cd {W} && {ver} {MSG}'",capture_output=True)
+        print(("ok   " if v.stdout==ref else "FAIL ")+n+": output "+("byte-identical" if v.stdout==ref else "DIFFERS"))
+        if v.stdout!=ref:continue
+        o=sh(f"{SSH} 'cd {W}; C=/mnt/c/Windows/System32/cmd.exe; t0=$(date +%s%N); $C /c rem >/dev/null 2>&1; t1=$(date +%s%N); CS=$((t1-t0)); "
+             f"t0=$(date +%s%N); $C /c \"for /L %i in (1,1,{it}) do @{cw} {MSG} >NUL\" >/dev/null 2>&1; t1=$(date +%s%N); echo $(( (t1-t0-CS)/{it} ))'",capture_output=True)
+        res.append((n,int(o.stdout.split()[-1])/1000))
+    base=next((u for n,u in res if "floor" in n),res[0][1])
+    print(f"\n{'on windows box (different device)':34}{'mean':>12}{'vs floor':>10}")
+    for n,us in res:print(f"{n:34}{us:>10.1f}µs{us/base:>9.1f}x")
     sys.exit(0)
 os.makedirs(B,exist_ok=True)
 open(SQ,"w").write(open("langs/cowsay.sql").read().replace("__MSG__",MSG.replace("'","''")))

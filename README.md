@@ -263,6 +263,21 @@ Kotlin is the first-class language of the world's most-installed OS, so `bench.p
 
 Kotlin cold-start on Android's own silicon is ~320ms per invocation — ~9x its desktop-JVM number (36ms) and ~2,770x the x86 assembly baseline. Installed apps dodge this via zygote pre-forking and AOT compilation — infrastructure that exists precisely because this cost is unbearable at OS scale. Two side findings from the experiment: Android's dynamically-linked `true` takes 37ms to exec, so a static binary beats the OS's smallest utility by 5.9x; and Android's `mksh` does 32-bit shell arithmetic, so nanosecond timestamps wrap — the bench does its timing math host-side.
 
+**It's the VM, not the language:** the same `cowsay.kt` compiled with Kotlin/Native (`kotlinc-native -opt`, a 485KB binary) runs in 1.1ms on desktop — 7x the assembly instead of Kotlin/JVM's 286x, a 40x improvement from deleting the VM. The desktop bench carries it as its own row, and `bench.py android` also cross-compiles it for `android_arm64` (bionic-linked `.kexe`) and times it on-device next to ART.
+
+### On-Device: Windows (HP Omen — different machine, numbers not comparable to the tables above)
+
+`bench.py windows [user@host] [port]` drives a Windows box over ssh into WSL2 with interop: it ships the same sources, compiles them with the compilers every Windows install already contains (`csc.exe` and `vbc.exe` ship in `C:\Windows` with .NET Framework — every Windows machine is secretly a C#/VB compiler), verifies byte-identity, and times natively via `cmd` loops with the WSL-interop + cmd startup measured and subtracted. A Zig `x86_64-windows` cross-build of the same cowsay (kernel32 `WriteFile`, no CRLF translation) is the same-machine floor:
+
+| on the Omen (Windows 11) | mean | vs floor |
+|---|---|---|
+| Zig win-x64 static (floor) | 23,030µs | 1.0x |
+| C# .NET Framework (in-box csc) | 45,471µs | 2.0x |
+| VB.NET Framework (in-box vbc) | 48,418µs | 2.1x |
+| PowerShell 5.1 | 204,150µs | 8.9x |
+
+The headline is the floor itself: spawning even a 194KB static native exe costs ~23ms on Windows (CreateProcess + Defender scanning) — ~55x the Linux exec floor and ~3.5x the Pixel's — so on Windows the process-creation tax, not the language runtime, dominates any small CLI. VBA remains unmeasured: Office is installed on the Omen, but VBA has no headless runner — driving it means Office COM automation, which is unsupported and hang-prone from a non-interactive ssh session.
+
 ## Alternative Implementation Methods
 
 All alternative optimization approaches are available in the `Alternative Methods/` directory.
