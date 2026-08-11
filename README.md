@@ -62,17 +62,18 @@ So `cowsay_ultra` hand-writes the ELF headers: one R+X `PT_LOAD` covering the wh
 `bench_ultra.sh` is the complete proof in one command: it builds everything, proves byte-identity against the previous champion across an edge-case matrix, then benchmarks against the exec floor.
 
 ```bash
-./bench_ultra.sh
+./bench_ultra.sh          # verify + benchmark
+./verify_identity.sh ./cowsay_ultra    # just the identity proof (also: make verify)
 ```
 
-The identity matrix covers 15 cases — no arguments (default message), empty arguments, multiple arguments, empty-then-nonempty and nonempty-then-empty, shell special characters, digits, multi-byte UTF-8, a 255-char argument (pass) vs 256 (error), a 1,023-char total (pass) vs 1,024 (error), and both error paths. Each case compares **stdout, stderr, and exit code**:
+The identity matrix (`verify_identity.sh` — the single source of truth, used by both the benchmark and the installer) covers 16 cases: no arguments (default message), empty arguments, multiple arguments, empty-then-nonempty and nonempty-then-empty, shell special characters, digits, multi-byte UTF-8, a 255-char argument (passes) vs 256 (errors), a 1,023-char total across four arguments (passes) vs 1,024 (errors), an oversized single argument, and both error paths. Each case compares **stdout, stderr, and exit code**:
 
 ```
 OK  rc=0 argc=0
 OK  rc=0 argc=3
 OK  rc=1 argc=1
 ...
-=== byte-identical: stdout+stderr+exit codes ===
+=== 16/16 byte-identical: stdout+stderr+exit codes ===
 ```
 
 `cowsay_ultra` is a drop-in replacement: identical output, identical `stderr` message, identical exit codes, identical limits (256 chars/arg, 1,024 chars total).
@@ -80,10 +81,61 @@ OK  rc=1 argc=1
 ```bash
 make cowsay_ultra              # nasm -f bin — assembler emits the executable, no linker
 ./cowsay_ultra "Hello, performance!"
-make install                   # installs cowsay_ultra as 'supercowsay'
 ```
 
 Requires `nasm`: `sudo apt install nasm`
+
+## Install as the `supercowsay` command
+
+```bash
+./install.sh
+supercowsay "moo from anywhere"
+```
+
+That's it. The installer doesn't just copy a file — it **installs whatever is actually fastest on your machine**, and refuses to install anything that isn't byte-perfect:
+
+1. **Builds** every candidate (`cowsay_ultra`, `cowsay_dynamic`) from source.
+2. **Verifies** each one is byte-identical to the reference implementation across all 16 edge cases — stdout, stderr, and exit code. A candidate that fails is excluded, not installed. Nothing ships unverified.
+3. **Races** the survivors with hyperfine on your CPU and picks the winner. Your machine decides, not this README.
+4. **Installs** to `/usr/local/bin` (or `~/.local/bin` without sudo) and prints a cow to prove it works.
+5. **Checks your PATH** — warns if the target isn't on it, or if another `supercowsay` earlier in your PATH would shadow the one just installed.
+
+```
+Building candidates...
+Verifying byte-identity...
+  OK  ./cowsay_ultra is byte-identical to cowsay_dynamic (16/16 cases)
+Racing candidates on this machine...
+  ./cowsay_ultra         60.4 us
+  ./cowsay_dynamic       64.4 us
+Winner: ./cowsay_ultra
+Installed ./cowsay_ultra -> /usr/local/bin/supercowsay
+```
+
+### Options
+
+| command | what it does |
+|---|---|
+| `./install.sh` | Race and install the winner (auto-picks `/usr/local/bin`, falls back to `~/.local/bin`) |
+| `./install.sh --user` | Install to `~/.local/bin` — **no sudo needed** |
+| `./install.sh --system` | Force `/usr/local/bin` (uses sudo) |
+| `./install.sh --prefix DIR` | Install to `DIR/bin` |
+| `./install.sh --no-race` | Skip the benchmark, install the known champion |
+| `./install.sh --uninstall` | Remove `supercowsay` from every known location |
+| `make install` / `make install-user` / `make uninstall` | Same thing via make |
+
+**Graceful degradation:** if `nasm` isn't installed, `cowsay_ultra` can't be built — the installer says so, tells you the apt command, and installs the verified `cowsay_dynamic` instead so you still get a working `supercowsay`. If `hyperfine` isn't installed, it skips the race and uses the known champion. Missing `binutils` is the only hard failure, since the reference implementation is what everything is verified against.
+
+### Usage
+
+```bash
+supercowsay "your custom message"
+supercowsay Multiple words work too
+supercowsay                                  # defaults to "Hello, World!"
+supercowsay "message" | lolcat               # pipes like anything else
+echo "exit code on overflow:"; supercowsay "$(head -c 2000 /dev/zero | tr '\0' 'x')"; echo $?
+```
+
+Limits are 256 characters per argument and 1024 total; over either, it prints `Error: Input too long (max 1024 characters)` to stderr and exits 1.
 
 ## The Previous Champion: Dynamic Assembly
 
@@ -148,8 +200,8 @@ make all
 # Compare implementations
 make bench-quick
 
-# Install system-wide (installs cowsay_ultra)
-make install
+# Install the fastest verified build as the 'supercowsay' command
+./install.sh
 supercowsay "Now available system-wide!"
 ```
 

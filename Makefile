@@ -1,7 +1,7 @@
 # SuperCowsay Makefile - Reproducible builds for all implementations
 # Supports x86_64 Linux systems
 
-.PHONY: all clean test bench install help
+.PHONY: all clean test bench install install-user uninstall verify help
 
 # Default target
 all: cowsay_dynamic cowsay_ultra c_implementations
@@ -79,18 +79,21 @@ bench-quick: all
 		echo "C implementation:"; time "$(ALT_DIR)/original" "The quick brown fox jumps over the lazy dog" >/dev/null; \
 	fi
 
-# Install to system (requires sudo)
-install: cowsay_ultra
-	@echo "Installing to /usr/local/bin..."
-	sudo cp cowsay_ultra /usr/local/bin/supercowsay
-	sudo chmod +x /usr/local/bin/supercowsay
-	@echo "✓ Installed as 'supercowsay'"
+# Install as 'supercowsay': builds, verifies byte-identity, races candidates,
+# installs whichever is fastest on THIS machine. See ./install.sh --help.
+install:
+	./install.sh
 
-# Uninstall from system
+install-user:
+	./install.sh --user
+
+# Uninstall from every known location
 uninstall:
-	@echo "Removing from /usr/local/bin..."
-	sudo rm -f /usr/local/bin/supercowsay
-	@echo "✓ Uninstalled"
+	./install.sh --uninstall
+
+# Prove the champion is byte-identical to the reference implementation
+verify: cowsay_ultra cowsay_dynamic
+	./verify_identity.sh ./cowsay_ultra
 
 # Check system requirements
 check-deps:
@@ -99,6 +102,8 @@ check-deps:
 	@gcc --version | head -1 || echo "MISSING - install with: sudo apt install gcc"
 	@echo -n "GNU Assembler: "
 	@as --version | head -1 || echo "MISSING - install with: sudo apt install binutils"
+	@echo -n "NASM (for the champion): "
+	@nasm --version 2>/dev/null || echo "MISSING - install with: sudo apt install nasm"
 	@echo -n "Make: "
 	@make --version | head -1 || echo "MISSING - install with: sudo apt install make"
 	@echo -n "Hyperfine (optional): "
@@ -128,21 +133,24 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@echo "  all          - Build all implementations"
+	@echo "  cowsay_ultra - Build the champion (hand-rolled ELF, needs nasm)"
 	@echo "  cowsay_dynamic - Build assembly implementation only"
 	@echo "  c_implementations - Build C implementations only"
 	@echo "  clean        - Remove all build artifacts"
 	@echo "  test         - Run correctness tests"
+	@echo "  verify       - Prove the champion is byte-identical to the reference"
 	@echo "  bench        - Run full rigorous benchmarks"
 	@echo "  bench-quick  - Run quick benchmarks"
-	@echo "  install      - Install to /usr/local/bin (requires sudo)"
-	@echo "  uninstall    - Remove from /usr/local/bin"
+	@echo "  install      - Install the fastest verified build as 'supercowsay'"
+	@echo "  install-user - Same, into ~/.local/bin (no sudo)"
+	@echo "  uninstall    - Remove supercowsay from every known location"
 	@echo "  check-deps   - Check system dependencies"
 	@echo "  sysinfo      - Display system information"
 	@echo "  ci           - Full CI pipeline (deps, build, test, bench)"
 	@echo "  help         - Show this help"
 	@echo ""
 	@echo "Examples:"
-	@echo "  make all && ./cowsay_dynamic \"Hello World\""
+	@echo "  make all && ./cowsay_ultra \"Hello World\""
 	@echo "  make test"
 	@echo "  make bench"
 	@echo "  make install && supercowsay \"Now installed system-wide\""
