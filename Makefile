@@ -4,7 +4,13 @@
 .PHONY: all clean test bench install help
 
 # Default target
-all: cowsay_dynamic c_implementations
+all: cowsay_dynamic cowsay_ultra c_implementations
+
+# Champion: hand-rolled minimal ELF (needs nasm)
+cowsay_ultra: cowsay_ultra.asm
+	nasm -f bin -o cowsay_ultra cowsay_ultra.asm
+	chmod +x cowsay_ultra
+	@echo "✓ Built cowsay_ultra"
 
 # Configuration
 CC = gcc
@@ -41,7 +47,7 @@ build_dir:
 # Clean build artifacts
 clean:
 	@echo "Cleaning build artifacts..."
-	rm -f cowsay_dynamic cowsay_dynamic.o
+	rm -f cowsay_dynamic cowsay_dynamic.o cowsay_ultra floor_exit
 	rm -f "$(ALT_DIR)"/cowsay_*
 	rm -f "$(ALT_DIR)"/*.o
 	rm -rf $(BUILD_DIR) $(TEST_DIR)
@@ -74,9 +80,9 @@ bench-quick: all
 	fi
 
 # Install to system (requires sudo)
-install: cowsay_dynamic
+install: cowsay_ultra
 	@echo "Installing to /usr/local/bin..."
-	sudo cp cowsay_dynamic /usr/local/bin/supercowsay
+	sudo cp cowsay_ultra /usr/local/bin/supercowsay
 	sudo chmod +x /usr/local/bin/supercowsay
 	@echo "✓ Installed as 'supercowsay'"
 
