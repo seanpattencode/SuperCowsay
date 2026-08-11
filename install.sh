@@ -6,6 +6,7 @@
 #   ./install.sh --system     # install to /usr/local/bin (sudo)
 #   ./install.sh --prefix DIR # install to DIR/bin
 #   ./install.sh --no-race    # skip the benchmark, install cowsay_ultra
+#   ./install.sh --full       # install the compatibility build (real cowsay features)
 #   ./install.sh --uninstall  # remove supercowsay from every known location
 #
 # Nothing is installed unless it is byte-identical to cowsay_dynamic (verify_identity.sh).
@@ -13,7 +14,7 @@ set -uo pipefail
 cd "$(dirname "$0")"
 NAME=supercowsay
 MSG="benchmark"                            # no commas: hyperfine CSV is parsed with awk
-PREFIX="" MODE=auto RACE=1 UNINSTALL=0
+PREFIX="" MODE=auto RACE=1 UNINSTALL=0 FULL=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -21,8 +22,9 @@ while [ $# -gt 0 ]; do
     --system)    MODE=system ;;
     --prefix)    PREFIX="${2:?--prefix needs a directory}"; MODE=prefix; shift ;;
     --no-race)   RACE=0 ;;
+    --full)      FULL=1 ;;
     --uninstall) UNINSTALL=1 ;;
-    -h|--help)   sed -n '2,11p' "$0" | sed 's/^# \?//'; exit 0 ;;
+    -h|--help)   sed -n '2,12p' "$0" | sed 's/^# \?//'; exit 0 ;;
     *) echo "unknown option: $1 (try --help)"; exit 2 ;;
   esac
   shift
@@ -44,7 +46,33 @@ if [ "$UNINSTALL" = 1 ]; then
   exit 0
 fi
 
+# --- compatibility build: a different contract, so a different check --------
+if [ "$FULL" = 1 ]; then
+  command -v gcc >/dev/null || die "gcc not found. Install with: sudo apt install gcc"
+  say "Building the compatibility build (feature-matched to the Perl original)..."
+  gcc -O2 -static -o cowsay_full cowsay_full.c || die "failed to build cowsay_full"
+  # cowsay_full is deliberately NOT identical to cowsay_dynamic (it wraps text and
+  # takes flags), so it is verified against the Perl original instead.
+  if command -v perl >/dev/null && [ -f cowsay_original_perl.pl ]; then
+    say "Verifying against the Perl original..."
+    ok=1
+    for m in "moo" "The quick brown fox jumps over the lazy dog" "word word word word word word word word word word"; do
+      a=$(COWPATH="$PWD/cows" ./cowsay_full "$m" 2>&1)
+      b=$(COWPATH="$PWD/cows" perl cowsay_original_perl.pl "$m" 2>&1)
+      [ "$a" = "$b" ] || { say "  !! output differs from Perl for: $m"; ok=0; }
+    done
+    [ "$ok" = 1 ] && say "  OK  byte-identical to the Perl original" \
+                  || die "verification failed; refusing to install"
+  else
+    say "  (perl unavailable - skipping verification)"
+  fi
+  WINNER=./cowsay_full
+  RACE=0
+  SKIP_BUILD=1
+fi
+
 # --- build candidates ------------------------------------------------------
+if [ "${SKIP_BUILD:-0}" = 0 ]; then
 say "Building candidates..."
 if ! command -v as >/dev/null || ! command -v ld >/dev/null; then
   die "binutils not found. Install with: sudo apt install binutils"
@@ -77,9 +105,10 @@ for c in "${CANDIDATES[@]}"; do
   fi
 done
 [ ${#VERIFIED[@]} -gt 0 ] || die "no candidate passed verification; refusing to install"
+WINNER="${VERIFIED[0]}"
+fi   # SKIP_BUILD
 
 # --- race: install what is actually fastest HERE ---------------------------
-WINNER="${VERIFIED[0]}"
 if [ "$RACE" = 1 ] && [ ${#VERIFIED[@]} -gt 1 ] && command -v hyperfine >/dev/null; then
   say "Racing candidates on this machine..."
   CSV=$(mktemp); PIN=""

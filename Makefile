@@ -1,16 +1,22 @@
 # SuperCowsay Makefile - Reproducible builds for all implementations
 # Supports x86_64 Linux systems
 
-.PHONY: all clean test bench install install-user uninstall verify eval help
+.PHONY: all clean test bench install install-user uninstall verify eval eval-full help
 
 # Default target
-all: cowsay_dynamic cowsay_ultra c_implementations
+all: cowsay_dynamic cowsay_ultra cowsay_full c_implementations
 
-# Champion: hand-rolled minimal ELF (needs nasm)
+# Speed build: hand-rolled minimal ELF (needs nasm). Single-line subset.
 cowsay_ultra: cowsay_ultra.asm
 	nasm -f bin -o cowsay_ultra cowsay_ultra.asm
 	chmod +x cowsay_ultra
 	@echo "✓ Built cowsay_ultra"
+
+# Compatibility build: byte-identical to the Perl original, full feature set.
+# Static: 1.8x faster startup than dynamic, verified identical output.
+cowsay_full: cowsay_full.c
+	$(CC) -O2 -static -Wall -Wextra -o cowsay_full cowsay_full.c
+	@echo "✓ Built cowsay_full"
 
 # Configuration
 CC = gcc
@@ -47,7 +53,7 @@ build_dir:
 # Clean build artifacts
 clean:
 	@echo "Cleaning build artifacts..."
-	rm -f cowsay_dynamic cowsay_dynamic.o cowsay_ultra floor_exit
+	rm -f cowsay_dynamic cowsay_dynamic.o cowsay_ultra cowsay_full floor_exit
 	rm -f "$(ALT_DIR)"/cowsay_*
 	rm -f "$(ALT_DIR)"/*.o
 	rm -rf $(BUILD_DIR) $(TEST_DIR)
@@ -98,6 +104,10 @@ verify: cowsay_ultra cowsay_dynamic
 # Adversarial evaluation: independent oracle, fuzzing, compat audit, speed scaling
 eval: cowsay_ultra cowsay_dynamic
 	python3 eval.py
+
+# Differential fuzz of the compatibility build against the Perl original
+eval-full: cowsay_full
+	python3 eval_full.py
 
 # Check system requirements
 check-deps:

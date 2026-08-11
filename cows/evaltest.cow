@@ -1,0 +1,10 @@
+##
+## A test cow exercising escapes and all three interpolated variables
+##
+$the_cow = <<"EOC";
+   $thoughts    ^___^
+    $thoughts  ( $eyes )\\====\\
+       (___)\\  \$cash  )\\/\\
+        $tongue  ||~~~~ |
+           ||    ||  @home
+EOC

@@ -13,6 +13,15 @@
                 ||     ||
 ```
 
+**Two builds, two contracts:**
+
+| build | speed | vs Perl | feature match |
+|---|---|---|---|
+| **`cowsay_ultra`** — the speed build | **59.8µs** (1.3µs above the kernel's exec floor) | **145x** | single-line subset |
+| **`cowsay_full`** — the compatibility build | **143µs** | **35.7x** | **byte-identical to the Perl original**, 344/344 differential-fuzz cases |
+
+Pick the first when you want the physical floor, the second when you want real cowsay — wrapping, appearance modes, cowfiles, flags, and stdin. Both are verified, not asserted: `./bench_ultra.sh`, `python3 eval.py`, `python3 eval_full.py`.
+
 ## The Champion: `cowsay_ultra`
 
 **`cowsay_ultra` is a 629-byte hand-written ELF executable that runs 1.3µs above the kernel's own process-spawn floor.** Not 1.3µs above another program — 1.3µs above an executable whose entire body is `exit(0)`. Everything cowsay actually does (read argv, build the box, draw the cow, write it) costs 1.3µs; the other 58.5µs is the kernel creating a process, which no userspace program can avoid.
@@ -130,6 +139,54 @@ Note the shape difference: real cowsay switches from `< >` to `/ \` delimiters o
 Real cowsay also supports cowfiles (`-f`), the mode flags (`-b -d -g -p -s -t -w -y`), `-W` width control, stdin, `cowthink`, and multi-line messages. We support none of it — and passing `-f` just prints a cow saying "-f". Against the actual cowsay feature set, this implementation is a **fast subset, not a superset**.
 
 **Verdict:** superior on the axis this project optimizes — speed, size, syscalls, memory, and verified correctness within its scope — by margins that are near-physically-maximal. Inferior as a general-purpose cowsay. The honest claim is *"the fastest possible implementation of single-line cowsay,"* not *"a better cowsay."*
+
+That last limitation is what `cowsay_full` exists to remove.
+
+## The Compatibility Build: `cowsay_full`
+
+The evaluation above scored 3/7 against real cowsay. `cowsay_full` scores **344/344** — it is a feature-matched port of the Perl original, byte-identical on stdout, stderr, and exit code, and **35.7x faster** than the Perl it replaces.
+
+```bash
+make cowsay_full
+./cowsay_full "The quick brown fox jumps over the lazy dog"   # wraps, like real cowsay
+./cowsay_full -d -W 30 "dead cow, narrow box"
+./install.sh --full                                            # install it as `supercowsay`
+```
+
+| build | speed | vs Perl | feature match | use it when |
+|---|---|---|---|---|
+| `cowsay_ultra` | **59.8µs** | 145x | single-line subset (3/7) | you want the floor |
+| `cowsay_full` | **143µs** | **35.7x** | **byte-identical (344/344)** | you want real cowsay |
+| Perl original | 8,649µs | 1x | reference | — |
+
+Supported: word wrapping, all three box shapes (`< >`, `/ \ | | \ /`, and `( )` for cowthink), every appearance mode (`-b -d -g -p -s -t -w -y`), `-e` eyes, `-T` tongue, `-W` width, `-n` no-wrap, `-f` cowfiles with heredoc parsing and variable interpolation, `-l` listing, `-h` help, stdin input, and `cowthink` behavior when invoked under a name containing "think".
+
+### Verification
+
+```bash
+python3 eval_full.py        # differential fuzz vs the Perl original (make eval-full)
+python3 eval_full.py -v     # with diffs
+```
+
+Every one of 344 cases runs through **both** `perl cowsay_original_perl.pl` and `./cowsay_full`, comparing stdout, stderr, and exit code byte-for-byte. Perl is the oracle; any difference is our bug. The corpus covers message shapes and every wrap boundary (38/39/40/41/78/79/80 chars), multi-argument joining, stdin including paragraph splitting and CRLF, all appearance modes, eyes/tongue of every length, widths from 1 to 1000, `-n`, cowfile loading by name and by path, option bundling (`-dy`, `-W20`, `-dW20`), `--`, unknown options, and 220 randomized combinations.
+
+### Perl behaviors that had to be reproduced exactly
+
+Getting from 300/310 to 344/344 meant matching quirks that no reasonable implementation would produce on its own. These are the ones that cost real debugging:
+
+- **`Text::Wrap` wraps to `columns - 1`.** The default `-W 40` yields 39-character lines.
+- **The final break character is re-appended.** `wrap()` ends with `$r .= $remainder`, so a paragraph ending in a space produces a last line with a *trailing space* — which then widens the entire balloon through `maxlength`. A naive greedy wrapper drops it and every box comes out one column narrow.
+- **`fill()` does not strip leading whitespace.** Text::Wrap 2024.001 has no `s/\A //`, though older copies of the algorithm do. So `cowsay "   leading"` keeps one leading space and a wider box.
+- **`-W 1` prints `< 3 >`.** With `columns < 2`, `Text::Wrap::wrap` bails via `return @_` — evaluated in the scalar context `fill()` calls it from, which yields the *argument count*. `wrap($ip,$xp,$pp)` has 3 arguments, so the message becomes the literal string `"3"`.
+- **`cowsay 0` reads stdin.** The input test is `if ($ARGV[0])`, a Perl truthiness check, and `"0"` is false.
+- **An all-whitespace message gives `<  >`, not `<   >`.** The loop-condition regex is itself a `/g` match, so on exit it has already consumed the trailing whitespace and `pos == length`.
+- **`Getopt::Std` warns and continues on unknown options.** `cowsay -notaflag` therefore sets `-n` and `-t`, warns twice, and hands `lag` to `-f` as the cowfile name — dying with exit 2 (`$!` = ENOENT).
+- **Bare `@array` and unknown `$scalar` in a cowfile interpolate to nothing.** A cowfile containing `@home` silently loses it, because the cow is a double-quoted Perl heredoc.
+- **The default cowpath is derived from the program's own location**, not hardcoded — `dirname(dirname(path))/share/cowsay/{site-cows,cows}`, defaults before `$COWPATH`.
+
+**Known, deliberate divergences.** For degenerate widths (`-W 0`, `-W -5`, `-W abc`) Perl leaks internal interpreter warnings naming absolute module paths (`Unescaped left brace in regex ... Text/Wrap.pm`); stdout and exit code match, stderr does not, and the eval reports this explicitly rather than hiding it. `.pm`-format cows and cowfiles containing arbitrary executable Perl are not supported — that would require an interpreter. `-r` and `-C` are accepted but inert, since random selection cannot be verified byte-identical anyway.
+
+**Why C and not assembly.** `Text::Wrap` semantics, `Getopt::Std` emulation, and cowfile templating are branch-heavy string work where assembly buys nothing — the cost here is process startup, not the algorithm. Static linking was the optimization that mattered: it cut startup from 261µs to 143µs, a **1.82x win for one compiler flag**, with byte-identical output.
 
 ## Install as the `supercowsay` command
 
