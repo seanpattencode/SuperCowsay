@@ -46,29 +46,25 @@ if [ "$UNINSTALL" = 1 ]; then
   exit 0
 fi
 
-# --- compatibility build: a different contract, so a different check --------
+# --- compatibility build: different contract, so verified against Perl ------
 if [ "$FULL" = 1 ]; then
   command -v gcc >/dev/null || die "gcc not found. Install with: sudo apt install gcc"
   say "Building the compatibility build (feature-matched to the Perl original)..."
   gcc -O2 -static -o cowsay_full cowsay_full.c || die "failed to build cowsay_full"
-  # cowsay_full is deliberately NOT identical to cowsay_dynamic (it wraps text and
-  # takes flags), so it is verified against the Perl original instead.
   if command -v perl >/dev/null && [ -f cowsay_original_perl.pl ]; then
     say "Verifying against the Perl original..."
     ok=1
-    for m in "moo" "The quick brown fox jumps over the lazy dog" "word word word word word word word word word word"; do
-      a=$(COWPATH="$PWD/cows" ./cowsay_full "$m" 2>&1)
-      b=$(COWPATH="$PWD/cows" perl cowsay_original_perl.pl "$m" 2>&1)
-      [ "$a" = "$b" ] || { say "  !! output differs from Perl for: $m"; ok=0; }
+    for m in "moo" "The quick brown fox jumps over the lazy dog" "$(printf 'word %.0s' {1..10})"; do
+      [ "$(COWPATH="$PWD/cows" ./cowsay_full "$m" 2>&1)" \
+      = "$(COWPATH="$PWD/cows" perl cowsay_original_perl.pl "$m" 2>&1)" ] \
+        || { say "  !! output differs from Perl for: $m"; ok=0; }
     done
     [ "$ok" = 1 ] && say "  OK  byte-identical to the Perl original" \
                   || die "verification failed; refusing to install"
   else
     say "  (perl unavailable - skipping verification)"
   fi
-  WINNER=./cowsay_full
-  RACE=0
-  SKIP_BUILD=1
+  WINNER=./cowsay_full RACE=0 SKIP_BUILD=1
 fi
 
 # --- build candidates ------------------------------------------------------

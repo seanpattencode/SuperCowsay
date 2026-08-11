@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """eval_full.py - differential fuzzing of cowsay_full against the original Perl.
 
-Every case runs through BOTH `perl cowsay_original_perl.pl` and `./cowsay_full`
-and the stdout, stderr, and exit code are compared byte-for-byte. Perl is the
-oracle; any difference is our bug.
+Every case runs through BOTH `perl cowsay_original_perl.pl` and `./cowsay_full`;
+stdout, stderr, and exit code are compared byte-for-byte. Perl is the oracle, so
+any difference is our bug.
 
-  python3 eval_full.py            # full run
-  python3 eval_full.py -v         # show a diff for each failure
+  python3 eval_full.py [-v]   # -v shows a diff per failure
 """
 import os, random, shutil, subprocess, sys, tempfile
 

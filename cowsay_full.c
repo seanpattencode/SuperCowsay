@@ -1,39 +1,21 @@
-/* cowsay_full.c - feature-matched port of the original Perl cowsay (3.8.5).
- *
- * Byte-identical to `perl cowsay_original_perl.pl` across word wrapping, all box
- * shapes, appearance modes, custom eyes/tongue, width control, stdin input,
- * cowfile loading, and cowthink. Verified by differential fuzzing (eval_full.py).
- *
- * This is the COMPATIBILITY build. cowsay_ultra is the SPEED build: 145x faster
- * than Perl but a single-line subset. This one trades some of that speed for
- * actually being cowsay.
- *
- * Semantics reproduced deliberately, each verified against the Perl:
- *   - Text::Wrap wraps to (columns - 1), so -W 40 yields 39-char lines.
- *   - `if ($ARGV[0])` is a Perl truthiness test: a bare "0" or "" first argument
- *     is FALSE, so cowsay reads stdin instead of using it as the message.
- *   - fill() squeezes all whitespace runs to one space and splits paragraphs on
- *     a newline followed by whitespace.
- *   - Words longer than the wrap width are hard-split, not overflowed.
- *   - Mode flags (-b -d ...) are applied after -e/-T, so they override them.
- *
- * Build: gcc -O2 -o cowsay_full cowsay_full.c
- */
+/* cowsay_full.c - feature-matched port of the Perl cowsay 3.8.5, byte-identical
+ * on stdout+stderr+exit code (eval_full.py fuzzes it against the Perl: 344/344).
+ * The reproduced Perl quirks are commented at the point of code; the README has
+ * the long form. Build: gcc -O2 -static -o cowsay_full cowsay_full.c */
 #define _GNU_SOURCE
 #include <ctype.h>
 #include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #define VERSION "3.8.5-SNAPSHOT"
 #define TABSTOP 8
 
-/* The default cow in RAW cowfile form (backslashes still doubled, as on disk),
- * so it runs through exactly the same unescape path as a -f cowfile. */
+/* Default cow in RAW cowfile form (backslashes still doubled, as on disk) so it
+ * runs through the same unescape path as any -f cowfile. */
 static const char *DEFAULT_COW_RAW =
     "        $thoughts   ^__^\n"
     "         $thoughts  ($eyes)\\\\_______\n"
@@ -43,69 +25,48 @@ static const char *DEFAULT_COW_RAW =
 
 static const char *progname = "cowsay";
 
-/* ---------- growable buffer ---------- */
+static void die_oom(void) { fprintf(stderr, "%s: out of memory\n", progname); exit(1); }
+
 typedef struct { char *s; size_t len, cap; } Buf;
 
 static void bput(Buf *b, const char *p, size_t n) {
     if (b->len + n + 1 > b->cap) {
         b->cap = (b->len + n + 1) * 2;
-        b->s = realloc(b->s, b->cap);
-        if (!b->s) { fprintf(stderr, "%s: out of memory\n", progname); exit(1); }
+        if (!(b->s = realloc(b->s, b->cap))) die_oom();
     }
     memcpy(b->s + b->len, p, n);
-    b->len += n;
-    b->s[b->len] = 0;
+    b->s[b->len += n] = 0;
 }
 static void bputs(Buf *b, const char *p) { bput(b, p, strlen(p)); }
 static void bputc_(Buf *b, char c) { bput(b, &c, 1); }
 static void brep(Buf *b, char c, size_t n) { while (n--) bputc_(b, c); }
+static char *bfin(Buf *b) { if (!b->s) bputs(b, ""); return b->s; }
 
-/* ---------- line list ---------- */
 typedef struct { char **v; size_t n, cap; } Lines;
 
 static void ladd(Lines *l, const char *s, size_t n) {
     if (l->n == l->cap) {
         l->cap = l->cap ? l->cap * 2 : 16;
-        l->v = realloc(l->v, l->cap * sizeof(char *));
-        if (!l->v) { fprintf(stderr, "%s: out of memory\n", progname); exit(1); }
+        if (!(l->v = realloc(l->v, l->cap * sizeof *l->v))) die_oom();
     }
     char *c = malloc(n + 1);
-    if (!c) { fprintf(stderr, "%s: out of memory\n", progname); exit(1); }
+    if (!c) die_oom();
     memcpy(c, s, n); c[n] = 0;
     l->v[l->n++] = c;
 }
 
-/* ---------- Text::Tabs::expand ---------- */
+/* Text::Tabs::expand */
 static char *expand_tabs(const char *s) {
     Buf b = {0};
-    size_t col = 0;
-    for (; *s; s++) {
-        if (*s == '\t') {
-            size_t pad = TABSTOP - (col % TABSTOP);
-            brep(&b, ' ', pad);
-            col += pad;
-        } else {
-            bputc_(&b, *s);
-            col++;
-        }
+    for (size_t col = 0; *s; s++) {
+        if (*s != '\t') { bputc_(&b, *s); col++; continue; }
+        size_t pad = TABSTOP - col % TABSTOP;
+        brep(&b, ' ', pad);
+        col += pad;
     }
-    if (!b.s) bputs(&b, "");
-    return b.s;
+    return bfin(&b);
 }
 
-/* ---------- Text::Wrap::wrap (2024.001), one whitespace-squeezed paragraph ----
- * Perl:
- *   while ($t !~ /\G(?:$break)*\Z/gc) {
- *       if ($t =~ /\G(.{0,$ll})($break|\n+|\z)/) { $r .= $nl.$1; $remainder = $2 }
- *       elsif ($huge eq 'wrap' && $t =~ /\G(.{$ll})/) { $r .= $nl.$1; $remainder = "\n" }
- *   }
- *   $r .= $remainder;
- *   $r .= substr($t, pos($t)) if pos($t) != length($t);
- *
- * The two tails are what a naive greedy wrapper gets wrong: the break character
- * that terminated the LAST line is re-appended, so a paragraph ending in a space
- * yields a final line with a trailing space (which then widens the whole box via
- * maxlength). Verified against Perl with -W 5. */
 static int is_break(unsigned char c) { return isspace(c) != 0; }
 
 static int all_breaks(const char *s) {
@@ -113,6 +74,14 @@ static int all_breaks(const char *s) {
     return 1;
 }
 
+/* Text::Wrap::wrap 2024.001 for one whitespace-squeezed paragraph. Greedily take
+ * the longest prefix <= ll followed by a break or end; else hard-split at ll.
+ * Two tails a naive greedy wrapper gets wrong:
+ *  - `$r .= $remainder` re-appends the break that ended the LAST line, so a
+ *    paragraph ending in a space yields a trailing-space line, which widens the
+ *    whole balloon through maxlength (see -W 5).
+ *  - No trailing-text append: the loop-condition regex is itself a /g match, so
+ *    on exit pos is already at the end. Hence an all-blank message gives `<  >`. */
 static char *wrap_para(const char *t, long ll) {
     size_t len = strlen(t), pos = 0;
     if (ll < 0) ll = 0;
@@ -122,83 +91,57 @@ static char *wrap_para(const char *t, long ll) {
 
     while (!all_breaks(t + pos)) {
         size_t avail = len - pos;
-        long maxk = (long)(avail < (size_t)ll ? avail : (size_t)ll);
-        long k = -1;
-        for (long j = maxk; j >= 0; j--) {          /* greedy: longest first */
+        long maxk = (long)(avail < (size_t)ll ? avail : (size_t)ll), k = -1;
+        for (long j = maxk; j >= 0; j--) {                 /* greedy: longest first */
             size_t p = pos + j;
-            if (p == len)                  { k = j; remainder = "";  break; }
+            if (p == len)                      { k = j; remainder = "";  break; }
             if (is_break((unsigned char)t[p])) { k = j; remainder = " "; break; }
         }
+        if (k < 0 && ll <= 0) break;                       /* no progress possible */
+        if (!first) bputc_(&r, '\n');
+        first = 0;
         if (k >= 0) {
-            if (!first) bputc_(&r, '\n');
             bput(&r, t + pos, k);
-            first = 0;
             pos += k;
-            if (pos < len) pos++;                   /* consume the break char */
-        } else if (ll > 0) {                        /* $huge eq 'wrap': hard split */
-            if (!first) bputc_(&r, '\n');
-            bput(&r, t + pos, ll);
-            first = 0;
+            if (pos < len) pos++;                          /* consume the break */
+        } else {
+            bput(&r, t + pos, ll);                         /* $huge eq 'wrap' */
             pos += ll;
             remainder = "\n";
-        } else {
-            break;                                  /* ll == 0: no progress possible */
         }
     }
     bputs(&r, remainder);
-    /* No trailing-text append here: the while-condition regex is itself a /g match,
-     * so when it succeeds (remaining text is all breaks) it advances pos to the end
-     * and Perl's `if pos($t) ne length($t)` never fires. That is why an all-blank
-     * message yields an EMPTY line (`<  >`) rather than a space (`<   >`). */
-    if (!r.s) bputs(&r, "");
-    return r.s;
+    return bfin(&r);
 }
 
-/* ---------- Text::Wrap::fill + split("\n", ...) ----------
- * fill: split into paragraphs on /\n\s+/, squeeze /\s+/ to " ", wrap each, join
- * with "\n\n". cowsay then splits the result on "\n".
- * NOTE: Text::Wrap 2024.001's fill does NOT strip a leading space (older copies
- * of the algorithm do). Perl keeps it, so a leading-whitespace message widens the
- * balloon by one - verified against `cowsay "   leading"`. */
+/* Text::Wrap::fill then split("\n"). Paragraphs split on /\n\s+/, each squeezed
+ * /\s+/ -> " ", wrapped, joined by "\n\n". NOTE: 2024.001's fill has no
+ * `s/\A //`, so leading whitespace survives and widens the box by one. */
 static void fill_and_split(Lines *in, long columns, Lines *out) {
     Buf joined = {0};
     for (size_t i = 0; i < in->n; i++) {
         if (i) bputc_(&joined, '\n');
         bputs(&joined, in->v[i]);
     }
-    if (!joined.s) bputs(&joined, "");
-
-    long ll = columns - 1;
-    const char *s = joined.s;
+    const char *s = bfin(&joined);
     size_t len = joined.len, i = 0;
     Buf filled = {0};
-    int first_para = 1;
 
-    while (i <= len) {
+    for (int first_para = 1; i <= len;) {
         size_t start = i, end = len, j = i;
-        for (; j < len; j++) {
-            if (s[j] == '\n' && j + 1 < len && isspace((unsigned char)s[j + 1])) {
-                end = j;
-                break;
-            }
-        }
-        if (j >= len) end = len;
+        for (; j < len; j++)
+            if (s[j] == '\n' && j + 1 < len && isspace((unsigned char)s[j + 1])) { end = j; break; }
 
-        Buf p = {0};                                 /* squeeze /\s+/ -> " " */
-        int in_ws = 0;
-        for (size_t k = start; k < end; k++) {
-            if (isspace((unsigned char)s[k])) {
-                if (!in_ws) { bputc_(&p, ' '); in_ws = 1; }
-            } else { bputc_(&p, s[k]); in_ws = 0; }
+        Buf p = {0};
+        for (size_t k = start, ws = 0; k < end; k++) {     /* squeeze /\s+/ -> " " */
+            if (!isspace((unsigned char)s[k])) { bputc_(&p, s[k]); ws = 0; }
+            else if (!ws) { bputc_(&p, ' '); ws = 1; }
         }
-        if (!p.s) bputs(&p, "");
-
-        /* Perl quirk: for $columns < 2, Text::Wrap::wrap bails with `return @_`,
-         * which in the scalar context fill() calls it from yields the ARGUMENT
-         * COUNT. wrap is always called as wrap($ip,$xp,$pp), so the paragraph
-         * becomes the literal string "3". Verified: `cowsay -W 1 hello` -> < 3 >. */
-        char *w = (columns < 2) ? strdup("3") : wrap_para(p.s, ll);
-        if (!first_para) bputs(&filled, "\n\n");     /* $ps when $ip eq $xp */
+        /* Perl quirk: with $columns < 2, wrap() bails via `return @_`, evaluated
+         * in fill()'s scalar context -> the ARGUMENT COUNT of wrap($ip,$xp,$pp).
+         * So `cowsay -W 1 hello` prints the literal string "3". */
+        char *w = columns < 2 ? strdup("3") : wrap_para(bfin(&p), columns - 1);
+        if (!first_para) bputs(&filled, "\n\n");
         first_para = 0;
         bputs(&filled, w);
         free(w);
@@ -206,21 +149,20 @@ static void fill_and_split(Lines *in, long columns, Lines *out) {
 
         if (end >= len) break;
         i = end + 1;
-        while (i < len && isspace((unsigned char)s[i])) i++;   /* consume \n\s+ */
+        while (i < len && isspace((unsigned char)s[i])) i++;
     }
     free(joined.s);
 
-    if (!filled.s) bputs(&filled, "");
-    for (char *p = filled.s;;) {                     /* split("\n", ...) */
+    for (char *p = bfin(&filled);;) {                      /* split("\n", ...) */
         char *nl = strchr(p, '\n');
-        if (nl) { ladd(out, p, nl - p); p = nl + 1; }
-        else { ladd(out, p, strlen(p)); break; }
+        ladd(out, p, nl ? (size_t)(nl - p) : strlen(p));
+        if (!nl) break;
+        p = nl + 1;
     }
     free(filled.s);
-    while (out->n > 0 && out->v[out->n - 1][0] == '\0') out->n--;  /* drop trailing empties */
+    while (out->n && !out->v[out->n - 1][0]) out->n--;     /* drop trailing empties */
 }
 
-/* ---------- cowfile ---------- */
 static char *slurp(const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) return NULL;
@@ -229,20 +171,16 @@ static char *slurp(const char *path) {
     size_t n;
     while ((n = fread(tmp, 1, sizeof tmp, f)) > 0) bput(&b, tmp, n);
     fclose(f);
-    if (!b.s) bputs(&b, "");
-    return b.s;
+    return bfin(&b);
 }
 
-/* Pull the heredoc body out of `$the_cow = <<"EOC"; ... EOC`. */
+/* Body of `$the_cow = <<"EOC"; ... EOC` */
 static char *extract_heredoc(const char *src) {
     const char *p = strstr(src, "$the_cow");
-    if (!p) return NULL;
-    p = strstr(p, "<<");
-    if (!p) return NULL;
+    if (!p || !(p = strstr(p, "<<"))) return NULL;
     p += 2;
     while (*p == ' ' || *p == '\t') p++;
-    char q = 0;
-    if (*p == '"' || *p == '\'') q = *p++;
+    char q = (*p == '"' || *p == '\'') ? *p++ : 0;
     char tag[128];
     size_t t = 0;
     while (*p && t < sizeof tag - 1 && (isalnum((unsigned char)*p) || *p == '_')) tag[t++] = *p++;
@@ -254,23 +192,21 @@ static char *extract_heredoc(const char *src) {
     Buf b = {0};
     while (*p) {
         const char *eol = strchr(p, '\n');
-        size_t linelen = eol ? (size_t)(eol - p) : strlen(p);
-        if (linelen == t && strncmp(p, tag, t) == 0) break;   /* terminator */
-        bput(&b, p, linelen);
+        size_t n = eol ? (size_t)(eol - p) : strlen(p);
+        if (n == t && !strncmp(p, tag, t)) break;          /* terminator */
+        bput(&b, p, n);
         bputc_(&b, '\n');
         if (!eol) break;
         p = eol + 1;
     }
-    if (!b.s) bputs(&b, "");
-    return b.s;
+    return bfin(&b);
 }
 
-/* Perl double-quoted heredoc interpolation.
- * Beyond the three cowsay variables: an unknown $scalar interpolates to empty,
- * and a bare @array does too - so a cowfile containing "@home" silently loses it,
- * exactly as the Perl does. Escapes \\ \$ \@ suppress this. */
 static int ident_char(unsigned char c) { return isalnum(c) || c == '_'; }
+static int ident_start(unsigned char c) { return isalpha(c) || c == '_'; }
 
+/* Perl double-quoted heredoc. Unknown $scalar and bare @array interpolate to
+ * EMPTY, so a cowfile containing "@home" silently loses it. \\ \$ \@ suppress. */
 static char *interpolate(const char *raw, const char *thoughts,
                          const char *eyes, const char *tongue) {
     Buf b = {0};
@@ -282,63 +218,45 @@ static char *interpolate(const char *raw, const char *thoughts,
             if (!strncmp(p, "$thoughts", 9)) { bputs(&b, thoughts); p += 9; continue; }
             if (!strncmp(p, "$eyes", 5))     { bputs(&b, eyes);     p += 5; continue; }
             if (!strncmp(p, "$tongue", 7))   { bputs(&b, tongue);   p += 7; continue; }
-            if (isalpha((unsigned char)p[1]) || p[1] == '_') {   /* unknown scalar -> "" */
-                p++;
-                while (ident_char((unsigned char)*p)) p++;
-                continue;
-            }
         }
-        if (*p == '@' && (isalpha((unsigned char)p[1]) || p[1] == '_')) {
-            p++;                                                  /* @array -> "" */
-            while (ident_char((unsigned char)*p)) p++;
+        if ((*p == '$' || *p == '@') && ident_start((unsigned char)p[1])) {
+            for (p++; ident_char((unsigned char)*p); p++) {}
             continue;
         }
         bputc_(&b, *p++);
     }
-    if (!b.s) bputs(&b, "");
-    return b.s;
+    return bfin(&b);
 }
 
-/* Perl derives the default cowpath from the SCRIPT's location:
- *   prefix = dirname(dirname(abs_path(script))); share = "$prefix/share/cowsay"
- * so it is <prefix>/share/cowsay/{site-cows,cows}. We do the same from the
- * executable's own path, which puts an installed /usr/local/bin/supercowsay onto
- * /usr/local/share/cowsay and keeps an in-repo run off the system cow directory,
- * exactly as the Perl behaves. Defaults come FIRST, then $COWPATH. */
+/* Perl derives the default cowpath from the script's own location; we do the
+ * same from the executable's, so an installed /usr/local/bin/supercowsay uses
+ * /usr/local/share/cowsay and an in-repo run stays off the system cowdir.
+ * Defaults first, then $COWPATH, deduped. */
 static void cowpath_dirs(Lines *dirs) {
-    char exe[4096];
+    char exe[4096], buf[4200];
     ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
-    int only_user = 0;
     const char *ocp = getenv("COWSAY_ONLY_COWPATH");
-    if (ocp && atoi(ocp) == 1) only_user = 1;
 
-    if (n > 0 && !only_user) {
+    if (n > 0 && !(ocp && atoi(ocp) == 1)) {
         exe[n] = 0;
-        char *slash = strrchr(exe, '/');            /* strip the binary name */
-        if (slash) *slash = 0;
-        slash = strrchr(exe, '/');                  /* strip the bin/ directory */
-        if (slash) *slash = 0;
-        char buf[4200];
+        for (int i = 0; i < 2; i++) {                      /* strip binary, then bin/ */
+            char *slash = strrchr(exe, '/');
+            if (slash) *slash = 0;
+        }
         snprintf(buf, sizeof buf, "%s/share/cowsay/site-cows", exe);
         ladd(dirs, buf, strlen(buf));
         snprintf(buf, sizeof buf, "%s/share/cowsay/cows", exe);
         ladd(dirs, buf, strlen(buf));
     }
     const char *cp = getenv("COWPATH");
-    if (cp && *cp) {
-        const char *s = cp;
-        while (*s) {
-            const char *c = strchr(s, ':');
-            size_t len = c ? (size_t)(c - s) : strlen(s);
-            if (len) {
-                int dup = 0;                        /* uniquify_list */
-                for (size_t i = 0; i < dirs->n; i++)
-                    if (strlen(dirs->v[i]) == len && !strncmp(dirs->v[i], s, len)) dup = 1;
-                if (!dup) ladd(dirs, s, len);
-            }
-            if (!c) break;
-            s = c + 1;
-        }
+    for (const char *s = cp && *cp ? cp : NULL; s;) {
+        const char *c = strchr(s, ':');
+        size_t len = c ? (size_t)(c - s) : strlen(s);
+        int dup = 0;
+        for (size_t i = 0; i < dirs->n && len; i++)
+            if (strlen(dirs->v[i]) == len && !strncmp(dirs->v[i], s, len)) dup = 1;
+        if (len && !dup) ladd(dirs, s, len);
+        s = c ? c + 1 : NULL;
     }
 }
 
@@ -351,36 +269,30 @@ static char *resolve_cow(const char *name) {
     if (is_file(name)) return strdup(name);
     Lines dirs = {0};
     cowpath_dirs(&dirs);
-    static char buf[4096];
-    for (size_t i = 0; i < dirs.n; i++) {
-        snprintf(buf, sizeof buf, "%s/%s", dirs.v[i], name);
-        if (is_file(buf)) return strdup(buf);
-        snprintf(buf, sizeof buf, "%s/%s.cow", dirs.v[i], name);
-        if (is_file(buf)) return strdup(buf);
-    }
+    char buf[4096];
+    for (size_t i = 0; i < dirs.n; i++)
+        for (int ext = 0; ext < 2; ext++) {
+            snprintf(buf, sizeof buf, ext ? "%s/%s.cow" : "%s/%s", dirs.v[i], name);
+            if (is_file(buf)) return strdup(buf);
+        }
     return NULL;
 }
 
-/* File::Find walk: names are relative to the cowdir, with ".cow" stripped. */
+/* File::Find walk; names are relative to the cowdir with ".cow" stripped. */
 static void find_cows(const char *base, const char *rel, Lines *found) {
-    char path[4096];
-    if (*rel) snprintf(path, sizeof path, "%s/%s", base, rel);
-    else snprintf(path, sizeof path, "%s", base);
+    char path[4096], sub[4096], full[8200];
+    snprintf(path, sizeof path, *rel ? "%s/%s" : "%s", base, rel);
     DIR *d = opendir(path);
     if (!d) return;
-    struct dirent *e;
-    while ((e = readdir(d))) {
+    for (struct dirent *e; (e = readdir(d));) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
-        char sub[4096];
         if (*rel) snprintf(sub, sizeof sub, "%s/%s", rel, e->d_name);
         else snprintf(sub, sizeof sub, "%s", e->d_name);
-        char full[8200];
         snprintf(full, sizeof full, "%s/%s", base, sub);
         struct stat st;
-        if (stat(full, &st) != 0) continue;
-        if (S_ISDIR(st.st_mode)) {
-            find_cows(base, sub, found);
-        } else if (S_ISREG(st.st_mode)) {
+        if (stat(full, &st)) continue;
+        if (S_ISDIR(st.st_mode)) find_cows(base, sub, found);
+        else if (S_ISREG(st.st_mode)) {
             size_t n = strlen(sub);
             if (n > 4 && !strcmp(sub + n - 4, ".cow")) ladd(found, sub, n - 4);
         }
@@ -388,38 +300,39 @@ static void find_cows(const char *base, const char *rel, Lines *found) {
     closedir(d);
 }
 
-static int cmp_str(const void *a, const void *b) {
-    return strcmp(*(char *const *)a, *(char *const *)b);
-}
+static int cmp_str(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
 
-/* Perl: dedupe via a hash, `sort keys`, and print one per line when stdout is
- * not a tty (list_cowfiles_parseable); a grouped listing when it is. */
+/* Perl: dedupe, sort, one name per line when stdout is not a tty; when it is,
+ * a per-directory listing wrapped at the default 76 columns. */
 static void list_cows(void) {
-    Lines dirs = {0};
+    Lines dirs = {0}, all = {0};
     cowpath_dirs(&dirs);
-    int tty = isatty(1);
-    Lines all = {0};
+    int tty = isatty(1), first = 1;
     for (size_t i = 0; i < dirs.n; i++) {
         Lines found = {0};
         find_cows(dirs.v[i], "", &found);
         if (!found.n) continue;
-        qsort(found.v, found.n, sizeof(char *), cmp_str);
+        qsort(found.v, found.n, sizeof *found.v, cmp_str);
         if (tty) {
-            printf("%s%s:\n", i && all.n ? "\n" : "", dirs.v[i]);
-            printf("Cow files in %s:\n", dirs.v[i]);
+            Buf j = {0};
+            for (size_t k = 0; k < found.n; k++) {
+                if (k) bputc_(&j, ' ');
+                bputs(&j, found.v[k]);
+            }
+            char *w = wrap_para(bfin(&j), 75);
+            printf("%sCow files in %s:\n%s\n", first ? "" : "\n", dirs.v[i], w);
+            free(w); free(j.s);
+            first = 0;
         }
-        for (size_t j = 0; j < found.n; j++) ladd(&all, found.v[j], strlen(found.v[j]));
+        for (size_t k = 0; k < found.n; k++) ladd(&all, found.v[k], strlen(found.v[k]));
     }
     if (tty) return;
-    qsort(all.v, all.n, sizeof(char *), cmp_str);
-    for (size_t i = 0; i < all.n; i++) {
-        if (i && !strcmp(all.v[i], all.v[i - 1])) continue;   /* dedupe */
-        printf("%s\n", all.v[i]);
-    }
+    qsort(all.v, all.n, sizeof *all.v, cmp_str);
+    for (size_t i = 0; i < all.n; i++)
+        if (!i || strcmp(all.v[i], all.v[i - 1])) printf("%s\n", all.v[i]);
 }
 
-/* Byte-for-byte the Perl HELP_MESSAGE heredoc (which interpolates $progname and
- * unescapes \< \>). */
+/* Byte-for-byte the Perl HELP_MESSAGE heredoc. */
 static void help(void) {
     printf("%s version " VERSION "\n"
            "\n"
@@ -458,80 +371,69 @@ static void help(void) {
            progname, progname, progname, progname, progname);
 }
 
-/* Perl truthiness: "" and "0" are false, everything else is true. */
-static int perl_true(const char *s) { return s && s[0] && strcmp(s, "0") != 0; }
+/* Perl truthiness: "" and "0" are false. So `cowsay 0` reads stdin. */
+static int perl_true(const char *s) { return s && s[0] && strcmp(s, "0"); }
 
 int main(int argc, char **argv) {
-    const char *base = strrchr(argv[0], '/');
-    progname = base ? base + 1 : argv[0];
+    const char *slash = strrchr(argv[0], '/');
+    progname = slash ? slash + 1 : argv[0];
     int think = strcasestr(progname, "think") != NULL;
 
-    char eyes[3] = "oo", tongue[3] = "  ";
     const char *opt_e = "oo", *opt_T = "  ", *cowfile = "default.cow";
     int no_wrap = 0, want_help = 0, want_list = 0;
     long columns = 40;
-    int borg = 0, dead = 0, greedy = 0, paranoid = 0, stoned = 0, tired = 0,
-        wired = 0, young = 0;
+    int borg = 0, dead = 0, greedy = 0, paranoid = 0, stoned = 0, tired = 0, wired = 0, young = 0;
 
-    /* Getopt::Std emulation. GNU getopt() differs in two ways that matter:
-     * it permutes (eating options that appear after the message), and it aborts
-     * on an unknown option. Perl warns "Unknown option: x" and keeps going, which
-     * is why `cowsay -notaflag` ends up with -n, -t set and "lag" as the cowfile. */
+    /* Getopt::Std emulation. GNU getopt() differs in two ways that matter: it
+     * permutes (eating options after the message) and aborts on an unknown one.
+     * Perl warns and continues, which is why `-notaflag` sets -n and -t, then
+     * hands "lag" to -f as the cowfile. */
     static const char *optstr = "bCde:f:ghlLnNprstT:wW:y";
     int ai = 1;
-    char pending[4096];
     while (ai < argc) {
         const char *a = argv[ai];
-        if (a[0] != '-' || a[1] == '\0') break;          /* not an option: stop */
+        if (a[0] != '-' || !a[1]) break;                   /* not an option: stop */
         if (!strcmp(a, "--")) { ai++; break; }
-        const char *chars = a + 1;
-        int consumed_arg = 0;
-        while (*chars) {
-            char f = *chars++;
-            const char *p = strchr(optstr, f);
-            if (p && f != ':') {
-                if (p[1] == ':') {                        /* option takes a value */
-                    const char *val;
-                    if (*chars) { val = chars; chars = ""; }
-                    else if (ai + 1 < argc) { val = argv[++ai]; }
-                    else { val = ""; }
-                    switch (f) {
-                    case 'e': opt_e = val; break;
-                    case 'T': opt_T = val; break;
-                    case 'f': cowfile = val; break;
-                    case 'W': columns = strtol(val, NULL, 10); break;
-                    }
-                    consumed_arg = 1;
-                } else {
-                    switch (f) {
-                    case 'b': borg = 1; break;
-                    case 'd': dead = 1; break;
-                    case 'g': greedy = 1; break;
-                    case 'p': paranoid = 1; break;
-                    case 's': stoned = 1; break;
-                    case 't': tired = 1; break;
-                    case 'w': wired = 1; break;
-                    case 'y': young = 1; break;
-                    case 'n': no_wrap = 1; break;
-                    case 'h': want_help = 1; break;
-                    case 'l': want_list = 1; break;
-                    default: break;                       /* C, L, N, r: inert */
-                    }
+        for (const char *ch = a + 1; *ch;) {
+            char f = *ch++;
+            const char *p = f == ':' ? NULL : strchr(optstr, f);
+            if (!p) { fprintf(stderr, "Unknown option: %c\n", f); continue; }
+            if (p[1] == ':') {                             /* takes a value */
+                const char *val = *ch ? ch : (ai + 1 < argc ? argv[++ai] : "");
+                ch = "";
+                switch (f) {
+                case 'e': opt_e = val; break;
+                case 'T': opt_T = val; break;
+                case 'f': cowfile = val; break;
+                case 'W': columns = strtol(val, NULL, 10); break;
                 }
-            } else {
-                fprintf(stderr, "Unknown option: %c\n", f);
+                continue;
+            }
+            switch (f) {
+            case 'b': borg = 1; break;
+            case 'd': dead = 1; break;
+            case 'g': greedy = 1; break;
+            case 'p': paranoid = 1; break;
+            case 's': stoned = 1; break;
+            case 't': tired = 1; break;
+            case 'w': wired = 1; break;
+            case 'y': young = 1; break;
+            case 'n': no_wrap = 1; break;
+            case 'h': want_help = 1; break;
+            case 'l': want_list = 1; break;
+            default: break;                                /* C, L, N, r: inert */
             }
         }
         ai++;
-        (void)pending; (void)consumed_arg;
     }
-    optind = ai;
     if (want_help) { help(); return 0; }
     if (want_list) { list_cows(); return 0; }
 
+    char eyes[3], tongue[3];
     snprintf(eyes, sizeof eyes, "%.2s", opt_e);
     snprintf(tongue, sizeof tongue, "%.2s", opt_T);
-    /* mode flags are applied after -e/-T and therefore override them */
+    /* Applied after -e/-T so they override it, and in Perl's fixed order - so
+     * `-y -d` and `-d -y` both yield young, the later test winning either way. */
     if (borg)     strcpy(eyes, "==");
     if (dead)     { strcpy(eyes, "xx"); strcpy(tongue, "U "); }
     if (greedy)   strcpy(eyes, "$$");
@@ -541,86 +443,60 @@ int main(int argc, char **argv) {
     if (wired)    strcpy(eyes, "OO");
     if (young)    strcpy(eyes, "..");
 
-    /* input: argv if the first remaining arg is Perl-true, else stdin */
     Lines raw = {0};
-    if (optind < argc && perl_true(argv[optind])) {
-        if (no_wrap) { help(); return 1; }      /* -n only works with stdin */
+    if (ai < argc && perl_true(argv[ai])) {
+        if (no_wrap) { help(); return 1; }                 /* -n is stdin-only */
         Buf m = {0};
-        for (int i = optind; i < argc; i++) {
-            if (i > optind) bputc_(&m, ' ');
+        for (int i = ai; i < argc; i++) {
+            if (i > ai) bputc_(&m, ' ');
             bputs(&m, argv[i]);
         }
-        if (!m.s) bputs(&m, "");
-        ladd(&raw, m.s, m.len);
+        ladd(&raw, bfin(&m), m.len);
         free(m.s);
     } else {
         Buf in = {0};
         char tmp[4096];
         size_t n;
         while ((n = fread(tmp, 1, sizeof tmp, stdin)) > 0) bput(&in, tmp, n);
-        if (in.s) {
-            char *p = in.s;
-            while (*p) {
-                char *nl = strchr(p, '\n');
-                if (nl) { ladd(&raw, p, nl - p); p = nl + 1; }
-                else { ladd(&raw, p, strlen(p)); break; }
-            }
-            free(in.s);
+        for (char *p = in.s; p && *p;) {                   /* chomp(<STDIN>) */
+            char *nl = strchr(p, '\n');
+            ladd(&raw, p, nl ? (size_t)(nl - p) : strlen(p));
+            if (!nl) break;
+            p = nl + 1;
         }
+        free(in.s);
     }
 
     Lines msg = {0};
-    if (no_wrap) {
+    if (no_wrap)
         for (size_t i = 0; i < raw.n; i++) {
             char *e = expand_tabs(raw.v[i]);
             ladd(&msg, e, strlen(e));
             free(e);
         }
-    } else {
+    else
         fill_and_split(&raw, columns, &msg);
-    }
 
-    /* ---------- balloon ---------- */
     size_t max = 0;
     for (size_t i = 0; i < msg.n; i++) {
         size_t l = strlen(msg.v[i]);
         if (l > max) max = l;
     }
-    const char *b0, *b1, *b2, *b3, *b4, *b5, *thoughts;
-    if (think) {
-        thoughts = "o";
-        b0 = "("; b1 = ")"; b2 = "("; b3 = ")"; b4 = "("; b5 = ")";
-    } else if (msg.n < 2) {
-        thoughts = "\\";
-        b0 = "<"; b1 = ">"; b2 = "<"; b3 = ">"; b4 = "<"; b5 = ">";
-    } else {
-        thoughts = "\\";
-        b0 = "/"; b1 = "\\"; b2 = "\\"; b3 = "/"; b4 = "|"; b5 = "|";
-    }
+    /* up-left, up-right, down-left, down-right, left, right */
+    const char *bd = think ? "()()()" : msg.n < 2 ? "<><><>" : "/\\\\/||";
+    const char *thoughts = think ? "o" : "\\";
 
     Buf out = {0};
     bputc_(&out, ' '); brep(&out, '_', max + 2); bputc_(&out, '\n');
-    {
-        const char *first = msg.n ? msg.v[0] : "";     /* $message[0] may be undef */
-        char *pad = malloc(max + 3);
-        snprintf(pad, max + 1 + 1, "%-*s", (int)max, first);
-        bputs(&out, b0); bputc_(&out, ' '); bputs(&out, pad);
-        bputc_(&out, ' '); bputs(&out, b1); bputc_(&out, '\n');
-        for (size_t i = 1; msg.n >= 2 && i + 1 < msg.n; i++) {
-            snprintf(pad, max + 1 + 1, "%-*s", (int)max, msg.v[i]);
-            bputs(&out, b4); bputc_(&out, ' '); bputs(&out, pad);
-            bputc_(&out, ' '); bputs(&out, b5); bputc_(&out, '\n');
-        }
-        if (msg.n >= 2) {
-            snprintf(pad, max + 1 + 1, "%-*s", (int)max, msg.v[msg.n - 1]);
-            bputs(&out, b2); bputc_(&out, ' '); bputs(&out, pad);
-            bputc_(&out, ' '); bputs(&out, b3); bputc_(&out, '\n');
-        }
-        free(pad);
+    for (size_t i = 0, n = msg.n ? msg.n : 1; i < n; i++) {
+        const char *s = i < msg.n ? msg.v[i] : "";         /* $message[0] may be undef */
+        int e = i == 0 ? 0 : (i == n - 1 ? 2 : 4);
+        bputc_(&out, bd[e]); bputc_(&out, ' ');
+        bputs(&out, s); brep(&out, ' ', max - strlen(s)); /* %-${max}s */
+        bputc_(&out, ' '); bputc_(&out, bd[e + 1]); bputc_(&out, '\n');
     }
     bputc_(&out, ' '); brep(&out, '-', max + 2); bputc_(&out, '\n');
 
-    /* ---------- cow ---------- */
     char *raw_cow = NULL, *path = resolve_cow(cowfile);
     if (path) {
         char *src = slurp(path);
@@ -628,16 +504,14 @@ int main(int argc, char **argv) {
         free(path);
     }
     if (!raw_cow) {
-        if (strcmp(cowfile, "default.cow") != 0) {
-            /* Perl dies here; its exit status is $! from the failed stat = ENOENT = 2 */
+        if (strcmp(cowfile, "default.cow")) {
+            /* Perl dies here; its status is $! from the failed stat = ENOENT = 2 */
             fprintf(stderr, "%s: Could not find cowfile for '%s'!\n", progname, cowfile);
             return 2;
         }
-        raw_cow = strdup(DEFAULT_COW_RAW);   /* self-contained fallback */
+        raw_cow = strdup(DEFAULT_COW_RAW);                 /* self-contained fallback */
     }
-    char *cow = interpolate(raw_cow, thoughts, eyes, tongue);
-
     fwrite(out.s, 1, out.len, stdout);
-    fputs(cow, stdout);
+    fputs(interpolate(raw_cow, thoughts, eyes, tongue), stdout);
     return 0;
 }

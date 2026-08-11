@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 """eval.py - adversarial evaluation of the SuperCowsay claim.
 
-bench_ultra.sh proves our two implementations agree with each other; a shared bug
-would pass it. This evaluates them against an INDEPENDENT oracle (the spec
-re-derived in Python), fuzzes them with inputs designed to break hand-written
-assembly, and measures where the "superior" claim actually holds and where it
-does not.
+bench_ultra.sh only proves our two implementations agree with each other, so a
+shared bug passes it. This checks them against an INDEPENDENT oracle (the spec
+re-derived below), fuzzes them, and audits where "superior" actually holds.
 
-  python3 eval.py            # full evaluation
-  python3 eval.py --quick    # skip the slow compat + speed dimensions
+  python3 eval.py [--quick]   # --quick skips the compat + speed dimensions
 """
 import ctypes, os, random, subprocess, sys, shutil
 
@@ -56,11 +53,8 @@ def run(binary, args):
 
 def structural(out, args):
     """Format invariants, checked without reference to any implementation.
-
-    Newline-safe: a message may itself contain \\n (the box then renders broken,
-    which is the documented single-line limitation, but the geometry of the
-    border/body/cow decomposition must still hold).
-    """
+    Newline-safe: an embedded \\n renders a broken box (the documented single-line
+    limit) but the border/body/cow geometry must still hold."""
     if not out:
         return "empty output"
     if not out.endswith(COW):
