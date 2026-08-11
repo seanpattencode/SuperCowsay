@@ -1,7 +1,7 @@
 # SuperCowsay Makefile - Reproducible builds for all implementations
 # Supports x86_64 Linux systems
 
-.PHONY: all clean test bench install install-user uninstall verify help
+.PHONY: all clean test bench install install-user uninstall verify eval help
 
 # Default target
 all: cowsay_dynamic cowsay_ultra c_implementations
@@ -95,6 +95,10 @@ uninstall:
 verify: cowsay_ultra cowsay_dynamic
 	./verify_identity.sh ./cowsay_ultra
 
+# Adversarial evaluation: independent oracle, fuzzing, compat audit, speed scaling
+eval: cowsay_ultra cowsay_dynamic
+	python3 eval.py
+
 # Check system requirements
 check-deps:
 	@echo "Checking system requirements..."
@@ -139,6 +143,7 @@ help:
 	@echo "  clean        - Remove all build artifacts"
 	@echo "  test         - Run correctness tests"
 	@echo "  verify       - Prove the champion is byte-identical to the reference"
+	@echo "  eval         - Adversarial eval: oracle, fuzzing, compat, speed scaling"
 	@echo "  bench        - Run full rigorous benchmarks"
 	@echo "  bench-quick  - Run quick benchmarks"
 	@echo "  install      - Install the fastest verified build as 'supercowsay'"

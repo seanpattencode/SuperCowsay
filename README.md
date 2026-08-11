@@ -85,6 +85,52 @@ make cowsay_ultra              # nasm -f bin — assembler emits the executable,
 
 Requires `nasm`: `sudo apt install nasm`
 
+## Evaluation: does "superior" actually hold?
+
+`bench_ultra.sh` only proves the two implementations agree **with each other** — a shared bug passes it. `eval.py` is the adversarial check: an **independent oracle** (the spec re-derived from scratch in Python), a fuzzer built to break hand-written assembly, and a compatibility audit against real cowsay.
+
+```bash
+python3 eval.py            # full evaluation
+python3 eval.py --quick    # correctness only, skip compat + speed
+```
+
+642 inputs × 2 implementations, including invalid UTF-8, raw control bytes, embedded newlines, 5,000-character arguments, 5,000 arguments at once, every limit boundary, and `argc=0` (no `argv[0]` at all — reachable only by calling `execv` through libc, since Python refuses to build an empty argv).
+
+| dimension | result |
+|---|---|
+| **Oracle conformance** — byte-exact vs an independently written spec | **642/642** both implementations |
+| **Structural invariants** — border geometry, cow integrity, no reference impl consulted | **PASS** every success output |
+| **Robustness** — no signal deaths, no unexpected exit codes, `argc=0` handled | **PASS** |
+| **Real cowsay compatibility** | **3/7** — diverges at ≥40 chars |
+| **Speed scaling** — 1 to 1,023 characters | **1.04–1.06x** over `cowsay_dynamic`, flat |
+
+**Where the claim holds — decisively.** The assembly is byte-exact against a spec written independently of it, across every adversarial input thrown at it. Nothing crashed. And the speed win is **flat across a 1,000x range of message sizes**:
+
+```
+len=    1  ultra  61.0us   dynamic  63.7us   ratio 1.04x
+len=   43  ultra  59.0us   dynamic  62.3us   ratio 1.06x
+len=  500  ultra  60.1us   dynamic  63.5us   ratio 1.06x
+len= 1023  ultra  61.6us   dynamic  64.6us   ratio 1.05x
+```
+
+Growing the message 1,000x costs **under a microsecond**. This is the thesis of the whole project in one table: the work is free, and process creation is everything. Optimizing the string handling would have been optimizing 1% of the runtime.
+
+**Where the claim does not hold.** `supercowsay` is **not a drop-in replacement for real cowsay**. It matches on short messages and diverges at 40 characters, where real cowsay word-wraps and we do not:
+
+```
+real cowsay, 43 chars                        supercowsay, 43 chars
+ _________________________________________    _____________________________________________
+/ The quick brown fox jumps over the lazy \   < The quick brown fox jumps over the lazy dog >
+\ dog                                     /    ---------------------------------------------
+ -----------------------------------------
+```
+
+Note the shape difference: real cowsay switches from `< >` to `/ \` delimiters once a message wraps to multiple lines. We always emit the single-line `< >` form.
+
+Real cowsay also supports cowfiles (`-f`), the mode flags (`-b -d -g -p -s -t -w -y`), `-W` width control, stdin, `cowthink`, and multi-line messages. We support none of it — and passing `-f` just prints a cow saying "-f". Against the actual cowsay feature set, this implementation is a **fast subset, not a superset**.
+
+**Verdict:** superior on the axis this project optimizes — speed, size, syscalls, memory, and verified correctness within its scope — by margins that are near-physically-maximal. Inferior as a general-purpose cowsay. The honest claim is *"the fastest possible implementation of single-line cowsay,"* not *"a better cowsay."*
+
 ## Install as the `supercowsay` command
 
 ```bash
