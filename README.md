@@ -1,6 +1,6 @@
-# SuperCowsay: Maximum Performance Cowsay
+# SuperCowsay
 
-**Performance-first optimization of the classic `cowsay` program. No compromises on speed.**
+**cowsay as a 629-byte hand-written ELF: 1.3µs above the Linux exec floor — the cost of spawning a process that does nothing at all.** A second build is byte-identical to the Perl original across 344 differential-fuzz cases while running 35.7x faster than it. Every number here is reproducible from this repo in one command.
 
 ```
  __________________________________________________________________
