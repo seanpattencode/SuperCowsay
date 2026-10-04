@@ -1,7 +1,7 @@
 # SuperCowsay Makefile - Reproducible builds for all implementations
 # Supports x86_64 Linux systems
 
-.PHONY: all clean test bench install install-user uninstall verify eval eval-full help
+.PHONY: all clean test bench install install-user uninstall verify eval eval-full eval-full-js verify-js bench-js help
 
 # Default target
 all: cowsay_dynamic cowsay_ultra cowsay_full c_implementations
@@ -17,6 +17,26 @@ cowsay_ultra: cowsay_ultra.asm
 cowsay_full: cowsay_full.c
 	$(CC) -O2 -static -Wall -Wextra -o cowsay_full cowsay_full.c
 	@echo "✓ Built cowsay_full"
+
+# JavaScript versions: ONE source, cowsay_full.js, runs on Node and Bun as is; Bun can also
+# compile it into a standalone executable. Verified against the Perl original exactly like
+# the C build (eval_full.py), plus the extra cases found while porting.
+cowsay_full_bun: cowsay_full.js
+	bun build --compile --minify --bytecode cowsay_full.js --outfile cowsay_full_bun
+	@echo "✓ Built cowsay_full_bun"
+
+eval-full-js: cowsay_full.js
+	python3 eval_full.py --extra --impl "node cowsay_full.js"
+	python3 eval_full.py --extra --impl "bun cowsay_full.js"
+
+# The speed-build subset in JS (langs/cowsay.js) against the 16-case identity matrix
+verify-js: cowsay_dynamic
+	./verify_identity.sh "node langs/cowsay.js"
+	./verify_identity.sh "bun langs/cowsay.js"
+
+# Verify both JS versions, then time them in one session next to the native builds
+bench-js: cowsay_ultra cowsay_full cowsay_full_bun
+	./bench_js.sh
 
 # Configuration
 CC = gcc
@@ -53,7 +73,7 @@ build_dir:
 # Clean build artifacts
 clean:
 	@echo "Cleaning build artifacts..."
-	rm -f cowsay_dynamic cowsay_dynamic.o cowsay_ultra cowsay_full floor_exit
+	rm -f cowsay_dynamic cowsay_dynamic.o cowsay_ultra cowsay_full cowsay_full_bun floor_exit
 	rm -f "$(ALT_DIR)"/cowsay_*
 	rm -f "$(ALT_DIR)"/*.o
 	rm -rf $(BUILD_DIR) $(TEST_DIR)
@@ -154,6 +174,10 @@ help:
 	@echo "  test         - Run correctness tests"
 	@echo "  verify       - Prove the champion is byte-identical to the reference"
 	@echo "  eval         - Adversarial eval: oracle, fuzzing, compat, speed scaling"
+	@echo "  eval-full-js - Fuzz cowsay_full.js against the Perl original, under node and bun"
+	@echo "  verify-js    - Identity matrix for the JS subset (langs/cowsay.js) on node and bun"
+	@echo "  bench-js     - Verify + time the JS versions next to the native builds"
+	@echo "  cowsay_full_bun - Standalone executable from cowsay_full.js (bun build --compile)"
 	@echo "  bench        - Run full rigorous benchmarks"
 	@echo "  bench-quick  - Run quick benchmarks"
 	@echo "  install      - Install the fastest verified build as 'supercowsay'"

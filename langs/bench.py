@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SuperCowsay polyglot bench — full PYPL language index (all implementable ranks 1-30) + APL + AWK
 # + DB index representatives (SQLite, MySQL, PostgreSQL, Redis) + Perl original.
+# JavaScript and TypeScript run twice: on Node and on Bun (plus `bun build --compile` as its own row).
 # Not implementable: VBA (needs Office host; VB.NET covers Visual Basic) · ABAP (SAP-proprietary)
 # · Oracle/SQL Server/Db2 (proprietary servers) · MongoDB (not in Ubuntu archives)
 # · PYPL IDE/Online-IDE indices (editors, not runtimes — nothing to execute cowsay in).
@@ -17,6 +18,7 @@ SWIFT="no apt pkg — swift.org/install: curl -O https://download.swift.org/swif
 DART="no apt/snap — dart.dev: curl -LO https://storage.googleapis.com/dart-archive/channels/stable/release/latest/sdk/dartsdk-linux-x64-release.zip && unzip -q dartsdk-*.zip -d ~/.local"
 APLH="GNU APL left Debian/Ubuntu archives — build from source: curl -sO https://ftp.gnu.org/gnu/apl/apl-2.0.tar.gz && tar xf apl-2.0.tar.gz && cd apl-2.0 && ./configure --prefix=$HOME/.local && make -j$(nproc) && make install"
 KNH="no pkg — JetBrains prebuilt: curl -sLO https://github.com/JetBrains/kotlin/releases/download/v2.4.10/kotlin-native-prebuilt-linux-x86_64-2.4.10.tar.gz && tar xzf kotlin-native-prebuilt-*.tar.gz -C ~/.local"
+BUNH="no apt pkg — bun.sh: curl -fsSL https://bun.sh/install | bash"
 def sh(c,**k):return subprocess.run(c,shell=isinstance(c,str),text=True,**k)
 L=[ # name, pypl rank, required tools, install hint (apt pkgs unless snap/URL), build, run argv (MSG appended unless DB special)
 ("Assembly","-",["as","ld"],"binutils","make cowsay_dynamic",["./cowsay_dynamic"]),
@@ -26,6 +28,9 @@ L=[ # name, pypl rank, required tools, install hint (apt pkgs unless snap/URL), 
 ("C++","3",["g++"],"g++",f"g++ -O3 -o {B}/cowsay_cpp langs/cowsay.cpp",[f"{B}/cowsay_cpp"]),
 ("R","4",["Rscript"],"r-base-core",None,["Rscript","langs/cowsay.R"]),
 ("JavaScript","5",["node"],"nodejs",None,["node","langs/cowsay.js"]),
+("JS/Bun","5",["bun"],BUNH,None,["bun","langs/cowsay.js"]),  # same file, JavaScriptCore runtime
+("JS/Bun-exe","5",["bun"],BUNH,  # bun build --compile: the runtime embedded in one ~80MB executable
+ f"bun build --compile --minify --bytecode langs/cowsay.js --outfile {B}/cowsay_bun >/dev/null",[f"{B}/cowsay_bun"]),
 ("Objective-C","6",["gnustep-config","gcc"],"gobjc gnustep-devel",  # -B/usr/bin: conda ld shadows system ld
  f"/usr/bin/gcc -B/usr/bin $(gnustep-config --objc-flags) -std=gnu99 -O2 -o {B}/cowsay_objc langs/cowsay.m $(gnustep-config --base-libs)",
  [f"{B}/cowsay_objc"]),
@@ -36,7 +41,8 @@ L=[ # name, pypl rank, required tools, install hint (apt pkgs unless snap/URL), 
  f"PATH=$HOME/.local/share/swiftly/bin:/usr/bin:/bin swiftc -O -o {B}/cowsay_swift langs/cowsay.swift",[f"{B}/cowsay_swift"]),
 ("Ada","11",["gnatmake"],"gnat",  # own obj dir: fpc also emits a cowsay.o
  f"mkdir -p {B}/ada && PATH=/usr/bin:/bin gnatmake -f -q -O2 -D {B}/ada -o {B}/cowsay_ada langs/cowsay.adb",[f"{B}/cowsay_ada"]),
-("TypeScript","12",["node"],"nodejs",None,["node","--experimental-strip-types","langs/cowsay.ts"]),
+("TypeScript","12",["node"],"nodejs",None,["node","--experimental-strip-types","--no-warnings","langs/cowsay.ts"]),
+("TS/Bun","12",["bun"],BUNH,None,["bun","langs/cowsay.ts"]),  # Bun strips types natively
 ("Matlab","13",["octave"],"octave  # Matlab language via GNU Octave",None,["octave","-qf","langs/cowsay_oct.m"]),
 ("PowerShell","14",["pwsh"],"snap install powershell --classic",None,["pwsh","-NoProfile","-File","langs/cowsay.ps1"]),
 ("Ruby","15",["ruby"],"ruby",None,["ruby","langs/cowsay.rb"]),
@@ -87,7 +93,7 @@ if sys.argv[1:2]==["setup"]:
     for l in L:
         m=miss(l)
         print(f"{'MISSING' if m else 'ok':8}{l[0]:13}"+(f" {' '.join(m)}  ({l[3]})" if m else ""))
-        if m:(man if l[3].startswith("snap ") or l[3] in(SWIFT,DART,APLH,KNH) else apt).append(l[3])
+        if m:(man if l[3].startswith("snap ") or l[3] in(SWIFT,DART,APLH,KNH,BUNH) else apt).append(l[3])
     print("\nnot implementable: VBA (Office host) · ABAP (SAP) · Oracle/SQLServer/Db2 (proprietary) · MongoDB (not in archives) · IDE/Online-IDE indices (editors, not runtimes)")
     if apt:
         c="sudo apt-get install -y "+" ".join(dict.fromkeys(" ".join(a.split("#")[0] for a in apt).split()))

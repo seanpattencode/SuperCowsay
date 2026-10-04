@@ -20,7 +20,7 @@
 | **`cowsay_ultra`** — the speed build | **59.8µs** (1.3µs above the kernel's exec floor) | **145x** | single-line subset |
 | **`cowsay_full`** — the compatibility build | **143µs** | **35.7x** | **byte-identical to the Perl original**, 344/344 differential-fuzz cases |
 
-Pick the first when you want the physical floor, the second when you want real cowsay — wrapping, appearance modes, cowfiles, flags, and stdin. Both are verified, not asserted: `./bench_ultra.sh`, `python3 eval.py`, `python3 eval_full.py`.
+Pick the first when you want the physical floor, the second when you want real cowsay — wrapping, appearance modes, cowfiles, flags, and stdin. Both are verified, not asserted: `./bench_ultra.sh`, `python3 eval.py`, `python3 eval_full.py`. Both also exist as JavaScript for Node and Bun, held to the same proofs: see [Node and Bun](#node-and-bun).
 
 ## The Champion: `cowsay_ultra`
 
@@ -158,6 +158,11 @@ make cowsay_full
 | `cowsay_ultra` | **59.8µs** | 145x | single-line subset (3/7) | you want the floor |
 | `cowsay_full` | **143µs** | **35.7x** | **byte-identical (344/344)** | you want real cowsay |
 | Perl original | 8,649µs | 1x | reference | — |
+| `cowsay_full_bun` (Bun-compiled) | 4.0ms | 2.3x | byte-identical (375/375) | one file, no runtime to install |
+| `cowsay_full.js` on Bun | 8.8ms | 1.0x | byte-identical (375/375) | you already run Bun |
+| `cowsay_full.js` on Node | 12.7ms | 0.7x | byte-identical (375/375) | you want `npm install -g` |
+
+The JavaScript rows are from their own session (`./bench_js.sh`, where Perl measured 9.1ms); they are the same program as `cowsay_full`, paying a virtual machine's startup instead of libc's. [Node and Bun](#node-and-bun) has the breakdown.
 
 Supported: word wrapping, all three box shapes (`< >`, `/ \ | | \ /`, and `( )` for cowthink), every appearance mode (`-b -d -g -p -s -t -w -y`), `-e` eyes, `-T` tongue, `-W` width, `-n` no-wrap, `-f` cowfiles with heredoc parsing and variable interpolation, `-l` listing, `-h` help, stdin input, and `cowthink` behavior when invoked under a name containing "think".
 
@@ -240,6 +245,68 @@ echo "exit code on overflow:"; supercowsay "$(head -c 2000 /dev/zero | tr '\0' '
 
 Limits are 256 characters per argument and 1024 total; over either, it prints `Error: Input too long (max 1024 characters)` to stderr and exits 1.
 
+## Node and Bun
+
+**Both contracts, one JavaScript file each, held to the same proofs as the native builds — and the proofs are the only axis where JavaScript ties.** The cowsay work is a few microseconds in every language; what differs is what has to happen before the first line of cowsay runs, and for JavaScript that is booting a virtual machine: 70–230x the entire native program. `cowsay_full.js` is the compatibility build: one dependency-free source that runs unchanged on Node and on Bun, and that `bun build --compile` turns into a standalone executable. `langs/cowsay.js` is the single-line subset. `./bench_js.sh` (`make bench-js`) verifies both, then times everything in one hyperfine session.
+
+```bash
+node cowsay_full.js -d -W 30 "dead cow, narrow box"      # Node
+bun  cowsay_full.js -d -W 30 "dead cow, narrow box"      # Bun, same file
+make cowsay_full_bun && ./cowsay_full_bun "standalone"     # bun build --compile --bytecode
+npm install -g .     # or: bun install -g .  ->  `supercowsay` on your PATH (package.json)
+```
+
+### Verified, not asserted
+
+| version | oracle | result |
+|---|---|---|
+| `node cowsay_full.js` | the Perl original: `python3 eval_full.py --extra --impl "node cowsay_full.js"` | **375/375** byte-identical on stdout, stderr and exit code; cowthink passes |
+| `bun cowsay_full.js` | same | **375/375** |
+| `cowsay_full_bun` (standalone) | same | **375/375** |
+| `node langs/cowsay.js`, `bun langs/cowsay.js` | `cowsay_dynamic`: `./verify_identity.sh "bun langs/cowsay.js"` | **16/16**, limits and error paths included |
+
+375 is the 344-case corpus `cowsay_full` is measured on, plus 31 cases found while writing the port (`--extra`). They are opt-in, so the C build's 344/344 stands as stated; on the extended set it scores **357/375**. The 18 it misses are real behaviors of the Perl that the JavaScript reproduces and the C does not:
+
+- **NEL (0x85) is a wrap break.** `Text::Wrap`'s `$break` pattern contains a code point above 0xFF, so Perl matches the *byte* string under Unicode rules: the second byte of a UTF-8 `Å` (C3 85) is whitespace to the wrapper, and `-W 4 'xÅÅÅy'` wraps inside the character, dropping the byte. `fill()`'s own `s/\s+/ /g` has no such code point and stays ASCII, which is why NBSP (0xA0) survives it.
+- **`-W 1` gives "3" only for a non-blank paragraph, and only the first one.** The `return @_` path also sets `$Text::Wrap::columns = 2`, so a second paragraph wraps at two columns; an all-blank paragraph or empty stdin gives `<  >`, not `< 3 >`. A `-W` with no value is `undef`, so 0.
+- **`-W` is numified the Perl way:** `-W 1e2` is 100 columns, where the C build's `strtol` reads 1.
+- **`-r` is broken in cowsay 3.8.5.** `pick_cow` reads `$defined_cows{basic}` — the hash `%defined_cows`, which does not exist — instead of the hashref it just built, so the usable list is always empty and `-r` dies with `Could not find cowfile for ''!`, exit 2. The port dies the same way.
+- **Getopt::Std:** `---` warns `Unknown option: -` once (each further dash is one more), and `-:` is silently accepted because `index()` finds the colon in the option string.
+- **Cowfiles:** a `<<'EOC'` body is raw; a double-quoted body honors `\n \t \e \xHH \NNN ${eyes}`, and `$eyesx` is a different (empty) variable; a `.pm` cow dies; a cowfile with no `$the_cow` prints the balloon and no cow.
+- **`-l`** prints a bare newline when nothing is found, ignores `COWPATH=0` (false), and with a trailing slash on an entry lists `efault` for `default.cow` — `File::Find` strips the slash and cowsay slices names by the unstripped length.
+
+Deliberate divergences, shared with the C build: Perl's leaked regex warnings for `-W 0`/`-W -5`/`-W abc`, cows that are arbitrary Perl, and a built-in default cow when no cowdir is found (Perl dies). Two are the JavaScript's own: `--help` and `--version` print one `name version 3.8.5-SNAPSHOT` line where Perl appends two more naming its own Getopt::Std and perl versions; and argv bytes that are not valid UTF-8 reach the script as U+FFFD, because both runtimes decode argv before any user code runs (stdin and cowfiles are read raw, and the box is measured in bytes as Perl does, so `🐄` is four columns wide).
+
+Runtime notes: Bun's CLI consumes the first `--` after the script name (`bun cowsay_full.js -- -d` sees no `--`; write `-- -- -d`, or use the compiled binary, which gets argv verbatim). Think mode is by program name, as in Perl: a symlink named `cowthink` works on Node, which keeps the symlink name in `argv[1]`; Bun resolves it, so there rename a copy. The npm bin is also called `supercowsay`, so it and the native install compete on PATH order, which `install.sh` already warns about.
+
+### Same-session benchmark: where the time goes
+
+Every program here has two costs: starting, and doing the cowsay work. The work is a few microseconds in every language. Starting is what differs, so the table reads as a ladder of what each version has to set up before its first line of cowsay runs. `node -e 0` and `bun -e 0` run no script at all, so each runtime's own cost can be read off directly. `./bench_js.sh`: hyperfine `-N`, pinned, 300+ runs per row, every row from one session.
+
+| row | mean | vs exec floor | what the time is |
+|---|---|---|---|
+| exec floor (`floor_exit`) | 54µs | 1.0x | the kernel creating a process |
+| `cowsay_ultra` (assembly) | 55µs | 1.02x | floor + 1µs of cowsay |
+| `cowsay_full` (C, static) | 136µs | 2.5x | floor + the C library setting itself up |
+| `bun -e 0` | 1.6ms | 29x | Bun's engine booting, no file |
+| **`cowsay_full_bun`** (Bun, compiled with bytecode) | **4.0ms** | **73x** | boot + loading precompiled bytecode |
+| `bun langs/cowsay.js` (6-line subset) | 7.8ms | 143x | boot + Bun's file loader |
+| `bun cowsay_full.js` (350 lines) | 8.8ms | 163x | the same |
+| Perl original | 9.1ms | 167x | the Perl interpreter + its modules |
+| `node -e 0` | 9.8ms | 182x | Node's engine booting, no file |
+| `node langs/cowsay.js` (6-line subset) | 11.1ms | 205x | boot + the module system |
+| `node cowsay_full.js` (350 lines) | 12.7ms | 235x | the same |
+
+**Assembly** sets nothing up. The kernel maps one page, the program makes two system calls, and it is done: 1µs above the floor, nothing left to remove.
+
+**C** does the same work after the C library initializes: about 30 system calls and 80µs more. The whole run is still a tenth of a millisecond.
+
+**Node** boots a JavaScript engine first. Loading the 120 MB binary and setting up V8 and the module system takes 9.8ms with no script at all; the cowsay script adds 3ms on top. A single-executable build (`--experimental-sea-config` + `postject`) is a 120 MB copy of node with the script appended, and it starts like one: 12.0ms against 12.3ms for plain `node` in a second session, so it is not kept in the repo.
+
+**Bun** boots in 1.6ms, six times faster than Node, but running a file costs another 6–7ms, and that is true for 6 lines or 350: syscall counts barely move, it is user time inside the runtime (6.9ms for the full port, 2.2ms with bytecode). Compiling to bytecode ahead of time skips most of it, which is why the standalone binary is the fastest JavaScript here at 4.0ms, for an 83 MB file. In the polyglot run Bun also ran TypeScript at the same 8.7ms as JavaScript, while Node's `--experimental-strip-types` took 32ms against 12ms for the same code as `.js`.
+
+**The summary:** the cowsay work is free everywhere. Assembly pays only the kernel; C pays the kernel plus libc; JavaScript pays the kernel plus booting a virtual machine, 70–230x the entire native program. Optimizing the script cannot close that gap, because the script is already the smallest cost on its row. The JS versions tie on correctness — the same oracle, a larger corpus — and lose on everything else this project measures. They win on `npm install -g`, and that is what they are for.
+
 ## The Previous Champion: Dynamic Assembly
 
 **File**: `cowsay_dynamic.s` — still built by `make all`, still the reference implementation whose output `cowsay_ultra` must match byte-for-byte.
@@ -299,6 +366,9 @@ make all
 
 # Prove it: byte-identity matrix + benchmark vs the kernel exec floor
 ./bench_ultra.sh
+
+# Node and Bun versions: verify both contracts, then time them next to the native builds
+./bench_js.sh
 
 # Compare implementations
 make bench-quick
@@ -370,7 +440,7 @@ readelf -lW ./cowsay_ultra
 
 ## Polyglot Benchmark — Full PYPL Index
 
-`langs/` holds the same cowsay in every implementable language of the PYPL index (Jul 2026 ranks 1-30: Python, Java, C, C++, R, JavaScript, Objective-C, PHP, C#, Rust, Swift, Ada, TypeScript, Matlab via Octave, PowerShell, Ruby, Kotlin, Dart, Lua, Go, Julia, Scala, Delphi/Pascal via FPC, Visual Basic via .NET, Zig, Perl original, Haskell, Groovy, Cobol) plus APL and AWK, plus the PYPL DB-index representatives runnable locally (SQLite, MySQL, PostgreSQL, Redis) — all byte-identical output to `cowsay_dynamic`, verified before timing. One Python script installs toolchains (apt + snap + DB user provisioning with `--yes`) and runs the bench.
+`langs/` holds the same cowsay in every implementable language of the PYPL index (Jul 2026 ranks 1-30: Python, Java, C, C++, R, JavaScript, Objective-C, PHP, C#, Rust, Swift, Ada, TypeScript, Matlab via Octave, PowerShell, Ruby, Kotlin, Dart, Lua, Go, Julia, Scala, Delphi/Pascal via FPC, Visual Basic via .NET, Zig, Perl original, Haskell, Groovy, Cobol) plus APL and AWK, plus the PYPL DB-index representatives runnable locally (SQLite, MySQL, PostgreSQL, Redis) — all byte-identical output to `cowsay_dynamic`, verified before timing. JavaScript and TypeScript each run twice, on Node and on Bun, and `bun build --compile` gets its own row; the two JS files also pass the full 16-case identity matrix (`./verify_identity.sh "bun langs/cowsay.js"`), limits and error paths included. One Python script installs toolchains (apt + snap + DB user provisioning with `--yes`) and runs the bench.
 
 Not implementable: VBA (needs an Office host), ABAP (SAP-proprietary), Oracle/SQL Server/Db2 (proprietary servers), MongoDB (not in Ubuntu archives), and PYPL's IDE/Online-IDE indices (editors, not runtimes — nothing to execute cowsay in).
 

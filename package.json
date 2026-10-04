@@ -1,0 +1,26 @@
+{
+  "name": "supercowsay",
+  "version": "0.1.0",
+  "description": "cowsay as one dependency-free JavaScript file for Node and Bun, byte-identical to the Perl original on stdout, stderr and exit code under differential fuzzing",
+  "bin": {
+    "supercowsay": "cowsay_full.js"
+  },
+  "files": [
+    "cowsay_full.js",
+    "cows/"
+  ],
+  "engines": {
+    "node": ">=14"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/seanpattencode/supercowsay.git"
+  },
+  "keywords": [
+    "cowsay",
+    "cli",
+    "node",
+    "bun"
+  ]
+}

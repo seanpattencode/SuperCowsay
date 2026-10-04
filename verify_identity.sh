@@ -3,19 +3,23 @@
 # Proves CANDIDATE is byte-identical to REFERENCE (default ./cowsay_dynamic) on
 # stdout, stderr, AND exit code across the full edge-case matrix. Single source of
 # truth for correctness - bench_ultra.sh and install.sh both call this.
+# CANDIDATE may be a command with arguments: verify_identity.sh "node langs/cowsay.js"
 # Exit 0 = identical, 1 = mismatch.
 cd "$(dirname "$0")"
 CAND="${1:?usage: verify_identity.sh CANDIDATE [REFERENCE]}"
 REF="${2:-./cowsay_dynamic}"
 QUIET="${QUIET:-0}"
-[ -x "$CAND" ] || { echo "verify: $CAND not executable"; exit 1; }
-[ -x "$REF" ]  || { echo "verify: reference $REF not executable"; exit 1; }
+if [ -x "$CAND" ]; then CANDV=("$CAND"); else read -r -a CANDV <<<"$CAND"; fi   # a path (spaces ok) or a command
+if [ -x "$REF" ];  then REFV=("$REF");   else read -r -a REFV  <<<"$REF";  fi
+runnable(){ [ -x "$1" ] || command -v "$1" >/dev/null 2>&1; }
+runnable "${CANDV[0]}" || { echo "verify: $CAND not executable"; exit 1; }
+runnable "${REFV[0]}"  || { echo "verify: reference $REF not executable"; exit 1; }
 
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 fail=0 n=0
 check(){
-  "$REF"  "$@" >"$T/r.out" 2>"$T/r.err"; re=$?
-  "$CAND" "$@" >"$T/c.out" 2>"$T/c.err"; ce=$?
+  "${REFV[@]}"  "$@" >"$T/r.out" 2>"$T/r.err"; re=$?
+  "${CANDV[@]}" "$@" >"$T/c.out" 2>"$T/c.err"; ce=$?
   n=$((n+1))
   if cmp -s "$T/r.out" "$T/c.out" && cmp -s "$T/r.err" "$T/c.err" && [ "$re" = "$ce" ]; then
     [ "$QUIET" = 1 ] || echo "  OK  rc=$re argc=$#"

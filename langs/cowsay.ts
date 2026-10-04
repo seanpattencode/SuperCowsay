@@ -1,3 +1,8 @@
+// Same contract as cowsay_dynamic, limits included (256 B/arg, 1024 B total): passes the
+// 16-case identity matrix on Node (--experimental-strip-types) and Bun.
 const a: string[] = process.argv.slice(2);
-const m: string = a.length ? a.join(" ") : "Hello, World!";
-process.stdout.write(` ${"_".repeat(m.length+2)}\n< ${m} >\n ${"-".repeat(m.length+2)}\n        \\   ^__^\n         \\  (oo)\\_______\n            (__)\\       )\\/\\\n                ||----w |\n                ||     ||\n`);
+let m: string = "", n: number = 0;
+for (const s of a) { const l: number = Buffer.byteLength(s); if (l >= 256 || (n += l + (n ? 1 : 0)) >= 1024) { require("fs").writeSync(2, "Error: Input too long (max 1024 characters)\n"); process.exit(1); } if (m) m += " "; m += s; }
+if (!a.length) m = "Hello, World!";
+const w: number = Buffer.byteLength(m);
+process.stdout.write(` ${"_".repeat(w+2)}\n< ${m} >\n ${"-".repeat(w+2)}\n        \\   ^__^\n         \\  (oo)\\_______\n            (__)\\       )\\/\\\n                ||----w |\n                ||     ||\n`);

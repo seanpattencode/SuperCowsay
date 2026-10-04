@@ -5,15 +5,22 @@ Every case runs through BOTH `perl cowsay_original_perl.pl` and `./cowsay_full`;
 stdout, stderr, and exit code are compared byte-for-byte. Perl is the oracle, so
 any difference is our bug.
 
-  python3 eval_full.py [-v]   # -v shows a diff per failure
+  python3 eval_full.py [-v]                        # -v shows a diff per failure
+  python3 eval_full.py --impl "node cowsay_full.js" # another implementation (same corpus)
+  python3 eval_full.py --impl "bun cowsay_full.js"
+  python3 eval_full.py --extra                     # + the cases found while porting to JS
 """
-import os, random, shutil, subprocess, sys, tempfile
+import atexit, os, random, shlex, shutil, subprocess, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PERL = os.path.join(HERE, "cowsay_original_perl.pl")
-FULL = os.path.join(HERE, "cowsay_full")
 ENV = dict(os.environ, COWPATH=os.path.join(HERE, "cows"))
 VERBOSE = "-v" in sys.argv
+
+# The implementation under test is a command; its last word is the program file
+# (the binary, or the script a runtime loads), resolved relative to this directory.
+IMPL = shlex.split(sys.argv[sys.argv.index("--impl") + 1]) if "--impl" in sys.argv else ["./cowsay_full"]
+IMPL[-1] = os.path.join(HERE, IMPL[-1]) if not os.path.isabs(IMPL[-1]) else IMPL[-1]
 
 
 def norm(data, name):
@@ -22,22 +29,23 @@ def norm(data, name):
     return data.replace(name.encode(), b"PROG")
 
 
-def run_perl(args, stdin=b"", script=PERL):
+def run_perl(args, stdin=b"", script=PERL, env=None):
     p = subprocess.run(["perl", script] + list(args), input=stdin,
-                       capture_output=True, env=ENV)
+                       capture_output=True, env=dict(ENV, **(env or {})))
     n = os.path.basename(script)
     return norm(p.stdout, n), norm(p.stderr, n), p.returncode
 
 
-def run_full(args, stdin=b"", exe=FULL):
-    p = subprocess.run([exe] + list(args), input=stdin,
-                       capture_output=True, env=ENV)
-    n = os.path.basename(exe)
+def run_full(args, stdin=b"", cmd=None, env=None):
+    cmd = cmd or IMPL
+    p = subprocess.run(cmd + list(args), input=stdin,
+                       capture_output=True, env=dict(ENV, **(env or {})))
+    n = os.path.basename(cmd[-1])
     return norm(p.stdout, n), norm(p.stderr, n), p.returncode
 
 
 def cases():
-    """(label, argv, stdin) triples."""
+    """(label, argv, stdin) triples, optionally with a 4th element: env overrides."""
     c = []
     A = lambda n: b"A" * n
     # --- message shapes -------------------------------------------------
@@ -135,7 +143,72 @@ def cases():
             c.append((f"rnd{i}-stdin", args, msg + b"\n"))
         else:
             c.append((f"rnd{i}", args + [msg], b""))
+    if "--extra" in sys.argv:
+        c += extra_cases()
     return c
+
+
+def extra_cases():
+    """Perl behaviors found while porting to JavaScript (cowsay_full.js passes all of
+    them; the C build does not, so they are opt-in and the 344-case claim stands as is).
+    Cowfiles for the heredoc cases are written to a temp dir so the repo stays as it is."""
+    d = tempfile.mkdtemp(prefix="cowsay-extra-")
+    atexit.register(shutil.rmtree, d, True)
+    def cow(name, body):
+        p = os.path.join(d, name)
+        with open(p, "wb") as f:
+            f.write(body)
+        return p.encode()
+    sq = cow("sq.cow", b"$the_cow = <<'EOC';\n$thoughts \\\\ $eyes \\$x\nEOC\n")
+    esc = cow("esc.cow", b"$the_cow = <<EOC;\nA\\nB\\x41\\101[\\e]${eyes}|$eyesx|@foo|\\\"q\\\"\nEOC\n")
+    pm = cow("x.pm", open(os.path.join(HERE, "cows/default.cow"), "rb").read())
+    bare = cow("bare.cow", b"1;\n")
+    W = lambda n: b"word " * n
+    return [
+        # Text::Wrap's $break holds a code point > 0xFF, so Perl matches the BYTE string
+        # under Unicode rules: NEL (0x85, the 2nd byte of UTF-8 'Å') is a break. fill()'s
+        # squeeze is not Unicode, so NBSP (0xA0) and NEL survive it.
+        ("x-nel-wrap", [b"-W", b"4"], b"x\xc3\x85\xc3\x85\xc3\x85y"),
+        ("x-nel-nowrap", [b"-W", b"100"], b"ab\xc3\x85\xc3\x85cd"),
+        ("x-nbsp-wrap", [b"-W", b"4"], b"x\xc5\xa0\xc5\xa0y"),
+        # columns < 2: an all-blank paragraph is "", not "3"; and wrap() sets $columns = 2
+        # as a side effect, so only the FIRST paragraph becomes "3".
+        ("x-W1-blank", [b"-W", b"1"], b"   \n"),
+        ("x-W1-empty-stdin", [b"-W", b"1"], b""),
+        ("x-W1-two-paras", [b"-W", b"1"], b"a\n b\n"),
+        ("x-W-missing-value", [b"-W"], b""),
+        # Perl numifies -W: "1e2" is 100, " 12" is 12
+        ("x-W1e2", [b"-W", b"1e2", W(30)], b""),
+        ("x-W-space12", [b"-W", b" 12", W(10)], b""),
+        # -r in 3.8.5 reads a hash that does not exist, so it always dies looking for ''
+        ("x-r", [b"-r", b"moo"], b""),
+        ("x-r-C", [b"-r", b"-C", b"moo"], b""),
+        # Getopt::Std: each extra leading dash is one "Unknown option: -"; -: is accepted
+        ("x-dashes3", [b"---", b"moo"], b""),
+        ("x-dashes4", [b"----", b"moo"], b""),
+        ("x-dash-dash-x", [b"--x", b"moo"], b""),
+        ("x-colon-opt", [b"-:", b"moo"], b""),
+        ("x-f-missing-value", [b"-f"], b""),
+        ("x-f-dir", [b"-f", b"cows", b"moo"], b""),
+        ("x-f-empty", [b"-f", b"", b"moo"], b""),
+        # cowfiles: <<'EOC' is raw, double-quoted escapes apply, ${eyes} and $eyesx differ,
+        # .pm dies, a file without $the_cow prints no cow
+        ("x-cow-single-quoted", [b"-f", sq, b"moo"], b""),
+        ("x-cow-escapes", [b"-f", esc, b"moo"], b""),
+        ("x-cow-pm", [b"-f", pm, b"moo"], b""),
+        ("x-cow-bare", [b"-f", bare, b"moo"], b""),
+        # -l: "\n" when nothing is found; COWPATH=0 is false, so ignored; an empty component
+        # is kept (and means "/"); a trailing slash on an entry shifts every name by one
+        ("x-l-nothing", [b"-l"], b"", {"COWPATH": "/nonexistent"}),
+        ("x-l-COWPATH-0", [b"-l"], b"", {"COWPATH": "0"}),
+        ("x-l-empty-component", [b"-l"], b"", {"COWPATH": ":" + os.path.join(HERE, "cows")}),
+        ("x-l-trailing-slash", [b"-l"], b"", {"COWPATH": os.path.join(HERE, "cows") + "/"}),
+        ("x-stdin-x-blank", [], b"x\n\n"),
+        ("x-stdin-nl-space", [], b"\n x\n"),
+        ("x-n-cr-tabs", [b"-n"], b"a\tb\r\n\tc\n"),
+        ("x-emoji-wrap", [("🐄" * 14).encode()], b""),
+        ("x-1024-arg", [b"x" * 1024], b""),
+    ]
 
 
 def show(label, args, stdin, exp, got):
@@ -154,17 +227,18 @@ def show(label, args, stdin, exp, got):
 
 
 def main():
-    if not os.path.exists(FULL):
-        print("build first: gcc -O2 -o cowsay_full cowsay_full.c"); return 2
+    if not os.path.exists(IMPL[-1]):
+        print(f"{IMPL[-1]} not found (build first: gcc -O2 -o cowsay_full cowsay_full.c)"); return 2
     cs = cases()
-    print(f"Differential fuzz vs the Perl original: {len(cs)} cases")
+    print(f"Differential fuzz vs the Perl original: {len(cs)} cases, testing: {shlex.join(IMPL)}")
     # For degenerate -W values Perl leaks internal interpreter warnings naming
     # absolute module paths ("Unescaped left brace in regex ... Text/Wrap.pm").
     # Reproducing that text is meaningless, so these compare stdout+rc only.
     STDOUT_ONLY = {"-W0", "-W-5", "-Wabc"}
     fails, relaxed = [], []
-    for label, args, stdin in cs:
-        exp, got = run_perl(args, stdin), run_full(args, stdin)
+    for label, args, stdin, *rest in cs:
+        env = rest[0] if rest else None
+        exp, got = run_perl(args, stdin, env=env), run_full(args, stdin, env=env)
         if label in STDOUT_ONLY:
             if (exp[0], exp[2]) != (got[0], got[2]):
                 fails.append((label, args, stdin, exp, got))
@@ -176,15 +250,16 @@ def main():
             if VERBOSE and len(fails) <= 12:
                 show(label, args, stdin, exp, got)
 
-    # cowthink: both sides renamed so $0 / argv[0] contain "think"
+    # cowthink: both sides renamed so $0 / argv[0] contain "think" (the program file
+    # keeps its extension, so a runtime still recognizes it: cowthink.js)
     tmp = tempfile.mkdtemp()
     tperl = os.path.join(tmp, "cowthink.pl")
-    tfull = os.path.join(tmp, "cowthink")
-    shutil.copy(PERL, tperl); shutil.copy(FULL, tfull)
+    tfull = os.path.join(tmp, "cowthink" + os.path.splitext(IMPL[-1])[1])
+    shutil.copy(PERL, tperl); shutil.copy(IMPL[-1], tfull)
     think_fail = 0
     for msg in [b"moo", b"word " * 20, b"a"]:
         e = run_perl([msg], b"", script=tperl)
-        g = run_full([msg], b"", exe=tfull)
+        g = run_full([msg], b"", cmd=IMPL[:-1] + [tfull])
         if (e[0], e[2]) != (g[0], g[2]):
             think_fail += 1
             if VERBOSE:
@@ -199,7 +274,7 @@ def main():
               f"Perl leaks internal regex warnings: {', '.join(relaxed)}")
     if fails:
         print(f"\n  {len(fails)} failing cases:")
-        for label, *_ in fails[:25]:
+        for label, *_ in fails[:40]:
             print(f"    - {label}")
         if not VERBOSE:
             print("  re-run with -v for diffs")
